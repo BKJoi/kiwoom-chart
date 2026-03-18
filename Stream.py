@@ -18,12 +18,23 @@ app_secret = st.secrets["APP_SECRET"]
 # ----------------------------------------------------
 @st.cache_data(ttl=3600)
 def get_access_token():
-    url = f"{host_url}/oauth2/token"
+    url = f"{host_url}/oauth2/token" # 또는 키움 API 문서에 적힌 토큰 발급 주소
     headers = {"Content-Type": "application/json;charset=UTF-8"}
     data = {"grant_type": "client_credentials", "appkey": app_key, "secretkey": app_secret}
+    
     response = requests.post(url, headers=headers, json=data)
-    return response.json().get('token')
-
+    
+    # 🚨 추가된 디버깅 코드: 200(정상)이 아니거나 JSON이 아니면 화면에 원인을 출력합니다!
+    try:
+        res_json = response.json()
+        # 보통 키움이나 한투 API는 'access_token' 이라는 키를 씁니다. ('token'이 아닐 수 있음)
+        return res_json.get('access_token', res_json.get('token')) 
+    except requests.exceptions.JSONDecodeError:
+        st.error("🚨 접근 토큰 발급 실패! (서버가 JSON이 아닌 값을 줬습니다)")
+        st.error(f"HTTP 상태 코드: {response.status_code}")
+        st.code(f"키움 서버의 실제 응답 내용:\n{response.text}")
+        return None
+        
 @st.cache_data(ttl=86400) 
 def get_broker_list(token):
     url = f"{host_url}/api/dostk/stkinfo"
