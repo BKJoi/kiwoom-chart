@@ -18,22 +18,31 @@ app_secret = st.secrets["APP_SECRET"]
 # ----------------------------------------------------
 @st.cache_data(ttl=3600)
 def get_access_token():
-    url = f"{host_url}/oauth2/token" # 또는 키움 API 문서에 적힌 토큰 발급 주소
-    headers = {"Content-Type": "application/json;charset=UTF-8"}
-    data = {"grant_type": "client_credentials", "appkey": app_key, "secretkey": app_secret}
+    # 토큰 발급 경로는 /oauth2/token 입니다.
+    url = f"{host_url}/oauth2/token"
+    
+    # 🚨 중요: 키움 API는 api-id를 헤더에 넣어야 할 때가 있습니다.
+    headers = {
+        "Content-Type": "application/json;charset=UTF-8",
+        "api-id": "au10001" 
+    }
+    
+    data = {
+        "grant_type": "client_credentials", 
+        "appkey": app_key, 
+        "secretkey": app_secret
+    }
     
     response = requests.post(url, headers=headers, json=data)
     
-    # 🚨 추가된 디버깅 코드: 200(정상)이 아니거나 JSON이 아니면 화면에 원인을 출력합니다!
-    try:
-        res_json = response.json()
-        # 보통 키움이나 한투 API는 'access_token' 이라는 키를 씁니다. ('token'이 아닐 수 있음)
-        return res_json.get('access_token', res_json.get('token')) 
-    except requests.exceptions.JSONDecodeError:
-        st.error("🚨 접근 토큰 발급 실패! (서버가 JSON이 아닌 값을 줬습니다)")
-        st.error(f"HTTP 상태 코드: {response.status_code}")
-        st.code(f"키움 서버의 실제 응답 내용:\n{response.text}")
+    # 404가 계속 뜬다면, 혹시 host_url 끝에 /가 붙어있지는 않은지 확인해보세요.
+    if response.status_code != 200:
+        st.error(f"토큰 발급 실패! 상태 코드: {response.status_code}")
+        # 만약 여전히 404라면, host_url을 "https://api.kiwoom.com"으로 바꿔서 시도해보세요.
+        # (인증 서버는 실전/모의 공용일 수 있습니다.)
         return None
+        
+    return response.json().get('token')
 
 @st.cache_data(ttl=86400) 
 def get_broker_list(token):
