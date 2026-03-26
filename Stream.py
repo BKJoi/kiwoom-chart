@@ -340,12 +340,13 @@ if auth_token and len(stock_number) == 6:
             df['Sell_1m_brk2'] = df['Sell_1m_brk2'].fillna(0)
             df['Cum_Net_brk2'] = df['Cum_Net_brk2'].ffill().fillna(0)
 
-# 동시호가 제거 
+# 동시호가 제거 (기존 코드)
             mask_outliers = df.index.strftime('%H%M').isin(['0900', '1530'])
             df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
 
-            # ⭐️ [핵심 변경] 20분 롤링 -> '장 시작부터 현재까지'의 누적 상관계수(Expanding)
-            # 맨 오른쪽 마지막 시간이 되면 전체 상관계수와 동일한 값이 됩니다.
+            df['Net_1m_brk1'] = df['Buy_1m_brk1'] - df['Sell_1m_brk1']
+            df['Net_1m_brk2'] = df['Buy_1m_brk2'] - df['Sell_1m_brk2']
+
             df['Expanding_Corr'] = df['Net_1m_brk1'].expanding(min_periods=5).corr(df['Net_1m_brk2']).fillna(0)
 
             # 📊 차트 그리기 (6단)
