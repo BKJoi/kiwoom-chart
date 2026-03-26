@@ -344,18 +344,27 @@ if auth_token and len(stock_number) == 6:
             mask_outliers = df.index.strftime('%H%M').isin(['0900', '1530'])
             df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
 
-            # 📊 차트 그리기 (5단)
+# 동시호가 제거 (기존 코드)
+            mask_outliers = df.index.strftime('%H%M').isin(['0900', '1530'])
+            df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
+
+            # ⭐️ [핵심 추가] 20분 단위 롤링(이동) 상관계수 계산
+            # 두 창구의 누적 순매수가 최근 20분 동안 얼마나 비슷하게(또는 반대로) 움직였는지 계산합니다.
+            df['Rolling_Corr'] = df['Cum_Net_brk1'].rolling(window=20, min_periods=5).corr(df['Cum_Net_brk2']).fillna(0)
+
+            # 📊 차트 그리기 (6단으로 진화!)
             fig = make_subplots(
-                rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.3, 0.1, 0.2, 0.2, 0.2], 
+                rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                row_heights=[0.3, 0.1, 0.15, 0.15, 0.15, 0.15], # 6층 높이 추가
                 subplot_titles=(
                     "가격 (한국식 컬러)", 
                     "거래량", 
                     "프로그램 수급", 
                     f"{selected_broker_name1} 수급", 
-                    f"{selected_broker_name2} 수급"
+                    f"{selected_broker_name2} 수급",
+                    "🤝 두 창구 간 실시간 결탁/대립 지표 (20분 롤링 상관계수)" # 6단 제목
                 ),
-                specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}]] 
+                specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": False}]] 
             )
 
             # 1층: 가격
@@ -383,9 +392,17 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.7), row=5, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적(우측)", line=dict(color='black', width=2.5)), row=5, col=1, secondary_y=True)
 
-            fig.update_layout(height=1300, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
+            # ⭐️ 6층: 상관계수 지표 (보라색 선)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Rolling_Corr'], mode='lines', name="상관계수", line=dict(color='purple', width=2)), row=6, col=1)
+            # 기준점 0 (점선) 추가 (0보다 아래면 역상관/싸움, 위면 정상관/결탁)
+            fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.7, row=6, col=1)
+            # 상관계수는 무조건 -1.0 ~ 1.0 사이이므로 Y축 고정
+            fig.update_yaxes(range=[-1.1, 1.1], row=6, col=1)
+
+            fig.update_layout(height=1400, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
+            
             st.plotly_chart(fig, use_container_width=True)
             
             if auto_refresh:
