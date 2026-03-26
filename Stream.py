@@ -352,7 +352,7 @@ if auth_token and len(stock_number) == 6:
             # 📊 차트 그리기 (6단)
             fig = make_subplots(
                 rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.3, 0.1, 0.15, 0.15, 0.15, 0.3], 
+                row_heights=[0.3, 0.1, 0.15, 0.15, 0.15, 0.6], 
                 subplot_titles=(
                     "가격 (한국식 컬러)", 
                     "거래량", 
