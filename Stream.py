@@ -78,73 +78,85 @@ def get_historical_minute_chart(token, stock_code):
         time.sleep(0.5) 
     return all_chart_data
 
-def get_historical_program_data(token, stock_code, target_date, max_pages=500):
+# ----------------------------------------------------
+# 강화된 데이터 수집 함수 (9시까지 끝까지 추적)
+# ----------------------------------------------------
+
+def get_historical_program_data(token, stock_code, target_date, max_pages=1500): # ⭐️ 1500페이지로 상향
     url = f"{host_url}/api/dostk/mrkcond"
     all_data = []
     next_key = ""
+    retry_count = 0 
+    
     for i in range(max_pages): 
         headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "ka90008", "authorization": f"Bearer {token}"}
         if next_key: headers.update({"cont-yn": "Y", "tr-cont": "Y", "next-key": next_key, "tr-cont-key": next_key})
-        req_data = {"amt_qty_tp": "2", "stk_cd": stock_code, "date": target_date}
         
+        req_data = {"amt_qty_tp": "2", "stk_cd": stock_code, "date": target_date}
         response = requests.post(url, headers=headers, json=req_data)
         
-        # ⭐️ 핵심 방어 로직: 호출 제한(1700 에러 등)에 걸리면 종료하지 않고 3초 대기 후 재시도!
         if response.status_code != 200:
-            time.sleep(3)
+            time.sleep(2) # ⭐️ 차단 회피를 위해 조금 더 쉽니다
             continue
             
         res_json = response.json()
         chunk = res_json.get('stk_tm_prm_trde_trnsn', [])
         
-        # 정상 응답인데 데이터가 비어있다면 진짜 끝난 것
-        if not chunk: break
+        if not chunk:
+            retry_count += 1
+            if retry_count > 3: break # 3번 연속 없으면 진짜 끝
+            time.sleep(0.5)
+            continue
         
+        retry_count = 0
         all_data.extend(chunk)
         
+        # 9시 도달 체크 (데이터가 09:00:00 이하로 내려가면 탈출)
         last_time = chunk[-1].get('tm', '')
         if last_time and last_time <= "090000":
             break
             
-        cont_yn = response.headers.get('cont-yn', response.headers.get('tr-cont', 'N'))
         next_key = response.headers.get('next-key', response.headers.get('tr-cont-key', ''))
-        if str(cont_yn).upper() not in ['Y', 'M'] or not next_key: break
-        
-        time.sleep(0.5) 
+        if not next_key: break
+        time.sleep(0.1) 
     return all_data
 
-def get_historical_broker_data(token, stock_code, brk_code, max_pages=500):
+def get_historical_broker_data(token, stock_code, brk_code, max_pages=1500): # ⭐️ 1500페이지로 상향
     url = f"{host_url}/api/dostk/stkinfo"
     all_data = []
     next_key = ""
-    for i in range(max_pages): 
+    retry_count = 0
+    
+    for i in range(max_pages):
         headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "ka10052", "authorization": f"Bearer {token}"}
         if next_key: headers.update({"cont-yn": "Y", "tr-cont": "Y", "next-key": next_key, "tr-cont-key": next_key})
-        req_data = {"mmcm_cd": brk_code, "stk_cd": stock_code, "mrkt_tp": "0", "qty_tp": "0", "pric_tp": "0", "stex_tp": "1"}
         
+        req_data = {"mmcm_cd": brk_code, "stk_cd": stock_code, "mrkt_tp": "0", "qty_tp": "0", "pric_tp": "0", "stex_tp": "1"}
         response = requests.post(url, headers=headers, json=req_data)
         
-        # ⭐️ 핵심 방어 로직: 차단 시 3초 쉬고 재시도
         if response.status_code != 200:
-            time.sleep(3)
+            time.sleep(2)
             continue
             
         res_json = response.json()
         chunk = res_json.get('trde_ori_mont_trde_qty', [])
         
-        if not chunk: break
-        
+        if not chunk:
+            retry_count += 1
+            if retry_count > 3: break
+            time.sleep(0.5)
+            continue
+            
+        retry_count = 0
         all_data.extend(chunk)
         
         last_time = chunk[-1].get('tm', chunk[-1].get('stck_cntg_hour', ''))
         if last_time and last_time <= "090000":
             break
             
-        cont_yn = response.headers.get('cont-yn', response.headers.get('tr-cont', 'N'))
         next_key = response.headers.get('next-key', response.headers.get('tr-cont-key', ''))
-        if str(cont_yn).upper() not in ['Y', 'M'] or not next_key: break
-        
-        time.sleep(0.5) 
+        if not next_key: break
+        time.sleep(0.1)
     return all_data
 # ==============================================================================
 # ⭐️ 핵심 1. 증발 버그 해결: 동시간대 중복 방지 로직 (데이터의 고유 지문 활용)
