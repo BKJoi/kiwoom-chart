@@ -340,28 +340,22 @@ if auth_token and len(stock_number) == 6:
             df['Sell_1m_brk2'] = df['Sell_1m_brk2'].fillna(0)
             df['Cum_Net_brk2'] = df['Cum_Net_brk2'].ffill().fillna(0)
 
-# 동시호가 제거 (기존 코드)
+            # 동시호가 제거
             mask_outliers = df.index.strftime('%H%M').isin(['0900', '1530'])
             df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
 
-            df['Net_1m_brk1'] = df['Buy_1m_brk1'] - df['Sell_1m_brk1']
-            df['Net_1m_brk2'] = df['Buy_1m_brk2'] - df['Sell_1m_brk2']
-
-            df['Expanding_Corr'] = df['Net_1m_brk1'].expanding(min_periods=5).corr(df['Net_1m_brk2']).fillna(0)
-
-            # 📊 차트 그리기 (6단)
+            # 📊 차트 그리기 (5단)
             fig = make_subplots(
-                rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.3, 0.1, 0.15, 0.15, 0.15, 0.6], 
+                rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                row_heights=[0.3, 0.1, 0.2, 0.2, 0.2], 
                 subplot_titles=(
                     "가격 (한국식 컬러)", 
                     "거래량", 
                     "프로그램 수급", 
                     f"{selected_broker_name1} 수급", 
-                    f"{selected_broker_name2} 수급",
-                    "🤝 두 창구 간 누적 상관계수 추이 (당일 누적)" # ⭐️ 제목 변경
+                    f"{selected_broker_name2} 수급"
                 ),
-                specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": False}]] 
+                specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}]] 
             )
 
             # 1층: 가격
@@ -389,16 +383,9 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.7), row=5, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적(우측)", line=dict(color='black', width=2.5)), row=5, col=1, secondary_y=True)
 
-            # ⭐️ 6층: 누적 상관계수 지표 (보라색 선)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Expanding_Corr'], mode='lines', name="누적 상관계수", line=dict(color='purple', width=2)), row=6, col=1)
-            # 기준점 0 (점선) 추가 
-            fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.7, row=6, col=1)
-            fig.update_yaxes(range=[-1.1, 1.1], row=6, col=1)
-
-            fig.update_layout(height=1400, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
+            fig.update_layout(height=1300, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
-            
             st.plotly_chart(fig, use_container_width=True)
             
             if auto_refresh:
