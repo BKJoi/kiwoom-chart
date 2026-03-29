@@ -340,22 +340,52 @@ if auth_token and len(stock_number) == 6:
             df['Sell_1m_brk2'] = df['Sell_1m_brk2'].fillna(0)
             df['Cum_Net_brk2'] = df['Cum_Net_brk2'].ffill().fillna(0)
 
-            # 동시호가 제거
+            # 동시호가 제거 (기존 코드)
             mask_outliers = df.index.strftime('%H%M').isin(['0900', '1530'])
             df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
 
-            # 📊 차트 그리기 (5단)
+            # ==============================================================================
+            # ⭐️ 추가된 파트: 프로그램 관여율(비중) 계산 로직
+            # ==============================================================================
+            # 1. 누적 거래량 계산
+            df['Cum_Vol'] = df['trde_qty'].cumsum()
+            
+            # 2. 프로그램 1분 총합 (매수 + 매도)
+            df['PG_Total_1m'] = df['Buy_1m'] + df['Sell_1m']
+            
+            # 3. 프로그램 누적 총합 (누적 매수 + 누적 매도)
+            df['Cum_PG_Total'] = df['PG_Total_1m'].cumsum()
+            
+            # 4. 1분봉 프로그램 관여율 (%) : (1분 PG총합 / 1분 거래량) * 100
+            # 거래량이 0일 때 에러가 나지 않도록 0을 잠시 비워두고 계산 후 다시 0으로 채웁니다.
+            df['PG_Ratio_1m'] = (df['PG_Total_1m'] / df['trde_qty'].replace(0, pd.NA)).fillna(0) * 100
+            
+            # 5. 누적 프로그램 관여율 (%) : (누적 PG총합 / 누적 거래량) * 100
+            df['PG_Ratio_Cum'] = (df['Cum_PG_Total'] / df['Cum_Vol'].replace(0, pd.NA)).fillna(0) * 100
+
+
+            # ==============================================================================
+            # 📊 차트 그리기 (기존 5단 -> 6단으로 확장)
+            # ==============================================================================
             fig = make_subplots(
-                rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.3, 0.1, 0.2, 0.2, 0.2], 
+                rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2], # ⭐️ 높이 비율 조정
                 subplot_titles=(
                     "가격 (한국식 컬러)", 
                     "거래량", 
                     "프로그램 수급", 
                     f"{selected_broker_name1} 수급", 
-                    f"{selected_broker_name2} 수급"
+                    f"{selected_broker_name2} 수급",
+                    "프로그램 관여율 (%)" # ⭐️ 6번째 차트 제목 추가
                 ),
-                specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}]] 
+                specs=[
+                    [{"secondary_y": False}], 
+                    [{"secondary_y": False}], 
+                    [{"secondary_y": True}], 
+                    [{"secondary_y": True}], 
+                    [{"secondary_y": True}],
+                    [{"secondary_y": True}]  # ⭐️ 6층(관여율) 설정 추가
+                ] 
             )
 
             # 1층: 가격
@@ -383,10 +413,30 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.7), row=5, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적(우측)", line=dict(color='black', width=2.5)), row=5, col=1, secondary_y=True)
 
-            fig.update_layout(height=1300, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
+            # ==============================================================================
+            # ⭐️ 6층: 프로그램 관여율 (새로 추가)
+            # ==============================================================================
+            # 1분 관여율 (막대 그래프, 좌측 축)
+            fig.add_trace(go.Bar(
+                x=df.index, y=df['PG_Ratio_1m'], 
+                name="1분 관여율(%)", marker_color='purple', opacity=0.4
+            ), row=6, col=1, secondary_y=False)
+            
+            # 누적 관여율 (꺾은선 그래프, 우측 축)
+            fig.add_trace(go.Scatter(
+                x=df.index, y=df['PG_Ratio_Cum'], 
+                mode='lines', name="누적 관여율(%)", line=dict(color='orange', width=2.5)
+            ), row=6, col=1, secondary_y=True)
+
+            # ⭐️ 차트 전체 높이를 기존 1300에서 1500으로 늘려줍니다.
+            fig.update_layout(height=1500, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
+            
+            # (이후 auto_refresh 로직은 그대로 유지)
+
+            
             
             if auto_refresh:
                 st.toast("⏳ 1분 뒤에 최신 수급을 다시 스캔합니다...")
