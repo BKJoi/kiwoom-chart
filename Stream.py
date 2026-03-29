@@ -345,16 +345,20 @@ if auth_token and len(stock_number) == 6:
             df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
 
             # ==============================================================================
-            # ⭐️ 수정된 파트: 프로그램 관여율 & 20이동평균 계산
+            # ⭐️ 1+3번 아이디어 결합: 거래량 가중 20평균 관여율 계산
             # ==============================================================================
             # 1. 프로그램 1분 총합 (매수 + 매도)
             df['PG_Total_1m'] = df['Buy_1m'] + df['Sell_1m']
             
-            # 2. 1분봉 프로그램 관여율 (%) : (1분 PG총합 / 1분 거래량) * 100
+            # 2. 1분봉 프로그램 관여율 (%)
             df['PG_Ratio_1m'] = (df['PG_Total_1m'] / df['trde_qty'].replace(0, pd.NA)).fillna(0) * 100
             
-            # 3. 관여율 20이동평균 계산 (최소 1개의 데이터만 있어도 선이 그려지도록 min_periods=1 설정)
-            df['PG_Ratio_1m_MA20'] = df['PG_Ratio_1m'].rolling(window=20, min_periods=1).mean()
+            # 3. 최근 20분간의 전체 거래량 합산 & 프로그램 거래량 합산
+            df['Vol_20m_Sum'] = df['trde_qty'].rolling(window=20, min_periods=1).sum()
+            df['PG_20m_Sum'] = df['PG_Total_1m'].rolling(window=20, min_periods=1).sum()
+            
+            # 4. 진짜 20분 평균 관여율 (%) = (20분 PG합 / 20분 거래량합) * 100
+            df['PG_Ratio_20m_True'] = (df['PG_20m_Sum'] / df['Vol_20m_Sum'].replace(0, pd.NA)).fillna(0) * 100
 
 
             # ==============================================================================
@@ -369,7 +373,7 @@ if auth_token and len(stock_number) == 6:
                     "프로그램 수급", 
                     f"{selected_broker_name1} 수급", 
                     f"{selected_broker_name2} 수급",
-                    "프로그램 관여율 (%) & 20이평" # ⭐️ 제목 수정
+                    "프로그램 관여율 (막대:1분, 선:20분 가중평균)" # ⭐️ 제목 수정
                 ),
                 specs=[
                     [{"secondary_y": False}], 
@@ -377,7 +381,7 @@ if auth_token and len(stock_number) == 6:
                     [{"secondary_y": True}], 
                     [{"secondary_y": True}], 
                     [{"secondary_y": True}],
-                    [{"secondary_y": False}]  # ⭐️ 비율이 같으므로 우측 축(True) 제거
+                    [{"secondary_y": True}]  # ⭐️ 이중 축을 위해 다시 True로 변경 (3번 아이디어)
                 ] 
             )
 
@@ -407,29 +411,34 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적(우측)", line=dict(color='black', width=2.5)), row=5, col=1, secondary_y=True)
 
             # ==============================================================================
-            # ⭐️ 6층: 프로그램 관여율 및 20이동평균 (수정됨)
+            # ⭐️ 6층: 프로그램 관여율 (이중 축 적용)
             # ==============================================================================
-            # 1분 관여율 (막대 그래프)
+            # 1분 관여율 (막대 그래프) -> 왼쪽 축 사용 (secondary_y=False)
+            # 튀는 값들이 시야를 덜 가리도록 투명도(opacity)를 0.3으로 더 낮췄습니다.
             fig.add_trace(go.Bar(
                 x=df.index, y=df['PG_Ratio_1m'], 
-                name="1분 관여율(%)", marker_color='purple', opacity=0.4
+                name="1분 관여율(좌측, %)", marker_color='purple', opacity=0.3
             ), row=6, col=1, secondary_y=False)
             
-            # 관여율 20이동평균 (꺾은선 그래프) - 둘 다 같은 퍼센티지(%) 스케일이므로 secondary_y=False로 통일
+            # 거래량 가중 20분 평균 관여율 (꺾은선 그래프) -> 오른쪽 축 사용 (secondary_y=True)
+            # 이제 100% 막대의 간섭을 받지 않고 부드럽고 큼직한 곡선으로 나타납니다.
             fig.add_trace(go.Scatter(
-                x=df.index, y=df['PG_Ratio_1m_MA20'], 
-                mode='lines', name="20이평 관여율(%)", line=dict(color='orange', width=2.5)
-            ), row=6, col=1, secondary_y=False)
+                x=df.index, y=df['PG_Ratio_20m_True'], 
+                mode='lines', name="20평균 관여율(우측, %)", line=dict(color='orange', width=3.0)
+            ), row=6, col=1, secondary_y=True)
 
             # 차트 레이아웃 업데이트
             fig.update_layout(height=1500, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
+            
+            # ⭐️ 6층 우측 축(가중평균)의 범위를 약간 넉넉하게 설정해서 선이 천장에 안 붙게 함 (옵션)
+            fig.update_yaxes(rangemode="tozero", row=6, col=1, secondary_y=True)
 
-            
-            
-            
+            st.plotly_chart(fig, use_container_width=True)
+            # ==============================================================================
+
+            # 👇 (이 아래는 기존 코드 그대로 유지) 👇
             if auto_refresh:
                 st.toast("⏳ 1분 뒤에 최신 수급을 다시 스캔합니다...")
                 time.sleep(60)
