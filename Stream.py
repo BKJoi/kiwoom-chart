@@ -404,7 +404,7 @@ if auth_token and len(stock_number) == 6:
             df.loc[mask_p, 'Signal_Value'] = (df['Max1'] - df['Cum_Net_brk1']) + (df['Cum_Net_brk2'] - df['Min2'])
             df.loc[~mask_p, 'Signal_Value'] = (df['Max2'] - df['Cum_Net_brk2']) + (df['Cum_Net_brk1'] - df['Min1'])
 
-            # --- 가변 임계치(T)를 이용한 Red/Blue 포인트 추출 루프 ---
+            # --- 가변 임계치(T) + 돌파 강도 필터 (도배 방지 버전) ---
             last_rp_val = 0.0      
             lowest_after_rp = 0.0  
             threshold_T = 0.0      
@@ -416,27 +416,27 @@ if auth_token and len(stock_number) == 6:
             for i in range(len(df)):
                 v = sv_list[i]
                 
-                # 1. 빨간 점 (지표 신고가)
-                if v > last_rp_val:
-                    # 새로운 고점 갱신 시 T 업데이트
+                # 1. 빨간 점 (돌파 강도 필터 추가)
+                # 단순히 클 때가 아니라, 이전 고점보다 최소 3% 이상은 더 커져야 '신호'로 인정
+                breakout_threshold = last_rp_val * 1.03 if last_rp_val > 0 else 0
+                
+                if v > breakout_threshold:
                     if last_rp_val > 0 and lowest_after_rp < last_rp_val:
-                        # 이전 하락폭을 임계치로 저장
                         new_T = last_rp_val - lowest_after_rp
                         if new_T > 0: threshold_T = new_T
                     
                     last_rp_val = v
                     lowest_after_rp = v
-                    red_signals[i] = v
+                    red_signals[i] = v # 확실히 튈 때만 점을 찍음
                 
-                # 2. 파란 점 (임계치 돌파 하락)
+                # 2. 파란 점 (임계치 필터)
                 elif v < last_rp_val:
-                    # ⭐️ 수정포인트: threshold_T가 0보다 클 때(즉, 최소 한 번의 파동이 끝난 후)만 파란 점 표시
                     if threshold_T > 0:
+                        # 하락도 임계치(T)보다 더 깊게 눌릴 때만 찍음
                         if v < (last_rp_val - threshold_T):
                             blue_signals[i] = v
                             if v < lowest_after_rp:
                                 lowest_after_rp = v
-                    # else: threshold_T가 0일 때는 파란 점을 아예 찍지 않습니다 (도배 방지)
 
             df['Sig_Red'] = red_signals
             df['Sig_Blue'] = blue_signals
