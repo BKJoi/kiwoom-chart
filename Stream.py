@@ -296,50 +296,43 @@ if auth_token and len(stock_number) == 6:
             df['PG_Ratio_60m_True'] = (df['PG_60m_Sum'] / df['Vol_60m_Sum'].replace(0, pd.NA)).fillna(0) * 100 
 
             # ==============================================================================
-            # ⭐️ [최종 완성] 사용자님의 '수정 논리 1 (뺄셈)' 기반 추세 변곡점 지표
+            # ⭐️ [핵심 로직] 사용자님 맞춤형 조건: 창구1의 최대 낙폭 맥점 포착
             # ==============================================================================
-            # 1. 각 창구의 실시간 누적 최대값(Max)과 최소값(Min) 계산
+            # 1. 실시간 누적 최대값(Max) 계산
             df['brk1_max'] = df['Cum_Net_brk1'].expanding().max()
-            df['brk1_min'] = df['Cum_Net_brk1'].expanding().min()
             df['brk2_max'] = df['Cum_Net_brk2'].expanding().max()
-            df['brk2_min'] = df['Cum_Net_brk2'].expanding().min()
 
-            # 2. 누가 '내려오는 쪽'이고 누가 '올라오는 쪽'인지 판별
-            # (MAX-현재) - (현재-MIN) 값이 큰 쪽이 고점에서 많이 밀려 내려온 '매도 창구'
-            df['brk1_score'] = (df['brk1_max'] - df['Cum_Net_brk1']) - (df['Cum_Net_brk1'] - df['brk1_min'])
-            df['brk2_score'] = (df['brk2_max'] - df['Cum_Net_brk2']) - (df['Cum_Net_brk2'] - df['brk2_min'])
-            condition_brk1_desc = df['brk1_score'] > df['brk2_score']
+            # 2. 현재 시점의 '낙폭' 계산 (최대값 - 현재 누적값)
+            df['brk1_drop'] = df['brk1_max'] - df['Cum_Net_brk1']
+            df['brk2_drop'] = df['brk2_max'] - df['Cum_Net_brk2']
 
-            # 3. ⭐️ 사용자님의 '수정 논리 1 (뺄셈)' 적용
-            # 내려오는 쪽의 낙폭 (우리는 이 값이 크길 원함)
-            desc_drop = np.where(condition_brk1_desc, df['brk1_max'] - df['Cum_Net_brk1'], df['brk2_max'] - df['Cum_Net_brk2'])
-            # 올라오는 쪽의 상승폭 (우리는 이 값이 작길 원함)
-            asc_rise = np.where(condition_brk1_desc, df['Cum_Net_brk2'] - df['brk2_min'], df['Cum_Net_brk1'] - df['brk1_min'])
-
-            # 최종 지표 = [내려온 폭] - [올라간 폭]
-            df['Trend_Exhaustion_Metric'] = desc_drop - asc_rise
-
-            # 4. 공식의 값이 '당일 최고'인 구간 찾기 (빨간색 강조)
+            # 3. 사용자님 조건 적용
             valid_df = df.between_time('09:05', '15:20')
             if not valid_df.empty:
-                # 뺄셈 지표가 가장 높게 치솟는 구간(상위 10% 이내)을 맥점으로 판별
-                metric_max = valid_df['Trend_Exhaustion_Metric'].max()
+                # 창구1의 당일 최대 낙폭 찾기
+                max_drop_brk1 = valid_df['brk1_drop'].max()
                 
-                # 만약 metric_max가 음수이거나 너무 작으면 무시 (최소한의 변동성 담보)
-                if metric_max > 500:
-                    df['Is_Macjum_Zone'] = df['Trend_Exhaustion_Metric'] >= (metric_max * 0.90)
-                else:
-                    df['Is_Macjum_Zone'] = False
+                # 조건 1: 창구1 낙폭 > 창구2 낙폭
+                cond1 = df['brk1_drop'] > df['brk2_drop']
+                
+                # 조건 2: 창구1 낙폭이 당일 최대치일 것 
+                # (점이 너무 짧게 끊기지 않도록 최대 낙폭의 98% 이상인 구간을 모두 칠함)
+                cond2 = df['brk1_drop'] >= (max_drop_brk1 * 0.98) 
+
+                # 낙폭이 실제로 존재할 때(0 초과)만 맥점으로 인정
+                df['Is_Red_Zone'] = cond1 & cond2 & (max_drop_brk1 > 0)
             else:
-                df['Is_Macjum_Zone'] = False
+                df['Is_Red_Zone'] = False
 
-            # 5. 빨간색 덧칠을 위한 데이터 분리
-            df['brk1_Red'] = df['Cum_Net_brk1'].where(df['Is_Macjum_Zone'], pd.NA)
-            df['brk2_Red'] = df['Cum_Net_brk2'].where(df['Is_Macjum_Zone'], pd.NA)
-            # ==============================================================================
+            # 4. 빨간색 덧칠을 위한 데이터 분리
+            df['brk1_Red'] = df['Cum_Net_brk1'].where(df['Is_Red_Zone'], pd.NA)
+            df['brk2_Red'] = df['Cum_Net_brk2'].where(df['Is_Red_Zone'], pd.NA)
             # ==============================================================================
 
+
+            # ==============================================================================
             # 📊 차트 그리기 (6단)
+            # ==============================================================================
             fig = make_subplots(
                 rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
                 row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2], 
@@ -351,21 +344,11 @@ if auth_token and len(stock_number) == 6:
                     f"{selected_broker_name2} 수급",
                     "프로그램 관여율 (막대:1분, 선:20/60 가중평균)" 
                 ),
-                specs=[
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}],
-                    [{"secondary_y": True}]
-                ] 
+                specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}]] 
             )
 
             # 1층: 가격
-            fig.add_trace(go.Candlestick(
-                x=df.index, open=df['open_pric'], high=df['high_pric'], low=df['low_pric'], close=df['cur_prc'],
-                name="가격", increasing_line_color='#ff4d4d', increasing_fillcolor='#ff4d4d', decreasing_line_color='#0066ff', decreasing_fillcolor='#0066ff' 
-            ), row=1, col=1)
+            fig.add_trace(go.Candlestick(x=df.index, open=df['open_pric'], high=df['high_pric'], low=df['low_pric'], close=df['cur_prc'], name="가격", increasing_line_color='#ff4d4d', increasing_fillcolor='#ff4d4d', decreasing_line_color='#0066ff', decreasing_fillcolor='#0066ff'), row=1, col=1)
 
             # 2층: 일반 거래량
             vol_colors = ['#ff4d4d' if c >= o else '#0066ff' for c, o in zip(df['cur_prc'], df['open_pric'])]
@@ -379,16 +362,18 @@ if auth_token and len(stock_number) == 6:
             # 4층: 창구 1
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk1'], name=f"{selected_broker_name1} 매수", marker_color='#ff4d4d', opacity=0.7), row=4, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk1'], name=f"{selected_broker_name1} 매도", marker_color='#0066ff', opacity=0.7), row=4, col=1, secondary_y=False)
+            # 기본 검은선
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk1'], mode='lines', name=f"{selected_broker_name1} 누적", line=dict(color='black', width=1.5)), row=4, col=1, secondary_y=True)
-            # ⭐️ 사용자님 로직 지표 강조 (두꺼운 빨간선)
-            fig.add_trace(go.Scatter(x=df.index, y=df['brk1_Red'], mode='lines+markers', name="변곡 맥점", line=dict(color='red', width=4), marker=dict(size=6, color='red'), connectgaps=False), row=4, col=1, secondary_y=True)
+            # ⭐️ 유저 로직: 창구1 낙폭 최대 구간 빨간색 강조
+            fig.add_trace(go.Scatter(x=df.index, y=df['brk1_Red'], mode='lines+markers', name="창구1 최대낙폭", line=dict(color='red', width=4), marker=dict(size=6, color='red'), connectgaps=False), row=4, col=1, secondary_y=True)
 
             # 5층: 창구 2
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk2'], name=f"{selected_broker_name2} 매수", marker_color='#ff4d4d', opacity=0.7), row=5, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.7), row=5, col=1, secondary_y=False)
+            # 기본 검은선
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적", line=dict(color='black', width=1.5)), row=5, col=1, secondary_y=True)
-            # ⭐️ 사용자님 로직 지표 강조 (두꺼운 빨간선)
-            fig.add_trace(go.Scatter(x=df.index, y=df['brk2_Red'], mode='lines+markers', name="변곡 맥점", line=dict(color='red', width=4), marker=dict(size=6, color='red'), connectgaps=False), row=5, col=1, secondary_y=True)
+            # ⭐️ 유저 로직: 창구1 조건 만족 시 창구2에도 동시간대 빨간색 표시 (흐름 비교용)
+            fig.add_trace(go.Scatter(x=df.index, y=df['brk2_Red'], mode='lines+markers', name="비교 맥점", line=dict(color='red', width=4), marker=dict(size=6, color='red'), connectgaps=False), row=5, col=1, secondary_y=True)
 
             # 6층: 프로그램 관여율
             fig.add_trace(go.Bar(x=df.index, y=df['PG_Ratio_1m'], name="1분 관여율", marker_color='purple', opacity=0.3), row=6, col=1, secondary_y=False)
@@ -400,14 +385,14 @@ if auth_token and len(stock_number) == 6:
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
 
-            # ⭐️ 모든 Y축 단위 생략(k, M) 방지 (전체 숫자 콤마 표시)
+            # ⭐️ 모든 Y축 단위 콤마 포맷으로 표시
             fig.update_yaxes(tickformat=",")
             # 6층 우측 축 0 기준 고정
             fig.update_yaxes(rangemode="tozero", row=6, col=1, secondary_y=True)
 
             st.plotly_chart(fig, use_container_width=True)
 
-            # 자동 새로고침 처리
+            # 👇 자동 갱신 로직 (기존 유지) 👇
             if auto_refresh:
                 st.toast("⏳ 1분 뒤에 최신 수급을 다시 스캔합니다...")
                 time.sleep(60)
