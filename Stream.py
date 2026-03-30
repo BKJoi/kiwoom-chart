@@ -439,7 +439,9 @@ if auth_token and len(stock_number) == 6:
             fig.update_layout(height=1500, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
-            
+
+            # 모든 Y축(세로축)의 숫자를 생략 없이(k 사용 안 함) 콤마 포맷으로 표시
+            fig.update_yaxes(tickformat=",")
             # 6층 우측 축 0 기준 고정
             fig.update_yaxes(rangemode="tozero", row=6, col=1, secondary_y=True)
 
