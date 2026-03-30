@@ -360,91 +360,97 @@ if auth_token and len(stock_number) == 6:
             df['Vol_60m_Sum'] = df['trde_qty'].rolling(window=60, min_periods=1).sum() # ⭐️ 60분 거래량 추가
             df['PG_60m_Sum'] = df['PG_Total_1m'].rolling(window=60, min_periods=1).sum() # ⭐️ 60분 PG 추가
             
+
             # 4. 진짜 20분 & 60분 평균 관여율 (%)
             df['PG_Ratio_20m_True'] = (df['PG_20m_Sum'] / df['Vol_20m_Sum'].replace(0, pd.NA)).fillna(0) * 100
-            df['PG_Ratio_60m_True'] = (df['PG_60m_Sum'] / df['Vol_60m_Sum'].replace(0, pd.NA)).fillna(0) * 100 # ⭐️ 60분 관여율 추가
-
+            df['PG_Ratio_60m_True'] = (df['PG_60m_Sum'] / df['Vol_60m_Sum'].replace(0, pd.NA)).fillna(0) * 100
 
             # ==============================================================================
-            # 📊 차트 그리기 (6단)
+            # ⭐️ [추가] 두 창구(Broker 1 & 2) 이격 계산 및 최소 지점 찾기
+            # ==============================================================================
+            # 사용자님이 말씀하신 abs(1-2) 로직입니다.
+            df['Broker_Gap'] = (df['Cum_Net_brk1'] - df['Cum_Net_brk2']).abs()
+            
+            # 9시 5분 이전은 데이터가 불안정하므로 제외하고, 그 이후 중 이격이 가장 작았던 시간(맥점)을 찾습니다.
+            valid_gap_data = df.between_time('09:05', '15:20')
+            if not valid_gap_data.empty:
+                min_gap_time = valid_gap_data['Broker_Gap'].idxmin()
+            else:
+                min_gap_time = None
+
+            # ==============================================================================
+            # 📊 차트 그리기 (6단 구성)
             # ==============================================================================
             fig = make_subplots(
                 rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
                 row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2], 
                 subplot_titles=(
-                    "가격 (한국식 컬러)", 
-                    "거래량", 
-                    "프로그램 수급", 
-                    f"{selected_broker_name1} 수급", 
-                    f"{selected_broker_name2} 수급",
-                    "프로그램 관여율 (막대:1분, 선:20/60 가중평균)" # ⭐️ 제목 수정
+                    "가격 (한국식 컬러)", "거래량", "프로그램 수급", 
+                    f"{selected_broker_name1} 수급", f"{selected_broker_name2} 수급",
+                    "프로그램 관여율 (막대:1분, 선:20/60 가중평균)"
                 ),
                 specs=[
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}],
-                    [{"secondary_y": True}]
+                    [{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": True}], 
+                    [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}]
                 ] 
             )
 
+            # --- 각 층별 데이터 채우기 ---
             # 1층: 가격
             fig.add_trace(go.Candlestick(
                 x=df.index, open=df['open_pric'], high=df['high_pric'], low=df['low_pric'], close=df['cur_prc'],
-                name="가격", increasing_line_color='#ff4d4d', increasing_fillcolor='#ff4d4d', decreasing_line_color='#0066ff', decreasing_fillcolor='#0066ff' 
+                name="가격", increasing_line_color='#ff4d4d', increasing_fillcolor='#ff4d4d', 
+                decreasing_line_color='#0066ff', decreasing_fillcolor='#0066ff' 
             ), row=1, col=1)
 
-            # 2층: 일반 거래량
+            # 2층: 거래량
             vol_colors = ['#ff4d4d' if c >= o else '#0066ff' for c, o in zip(df['cur_prc'], df['open_pric'])]
             fig.add_trace(go.Bar(x=df.index, y=df['trde_qty'], name="거래량", marker_color=vol_colors), row=2, col=1)
             
-            # 3층: PG
+            # 3층: 프로그램(PG)
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m'], name="PG 매수", marker_color='#ff4d4d', opacity=0.7), row=3, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m'], name="PG 매도", marker_color='#0066ff', opacity=0.7), row=3, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net'], mode='lines', name="PG 누적(우측)", line=dict(color='black', width=2.5)), row=3, col=1, secondary_y=True)
 
-            # 4층: 창구 1
+            # 4층: 창구 1 (선택한 첫 번째 증권사)
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk1'], name=f"{selected_broker_name1} 매수", marker_color='#ff4d4d', opacity=0.7), row=4, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk1'], name=f"{selected_broker_name1} 매도", marker_color='#0066ff', opacity=0.7), row=4, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk1'], mode='lines', name=f"{selected_broker_name1} 누적(우측)", line=dict(color='black', width=2.5)), row=4, col=1, secondary_y=True)
 
-            # 5층: 창구 2
+            # 5층: 창구 2 (선택한 두 번째 증권사)
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk2'], name=f"{selected_broker_name2} 매수", marker_color='#ff4d4d', opacity=0.7), row=5, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.7), row=5, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적(우측)", line=dict(color='black', width=2.5)), row=5, col=1, secondary_y=True)
 
+            # 6층: 프로그램 관여율
+            fig.add_trace(go.Bar(x=df.index, y=df['PG_Ratio_1m'], name="1분 관여율(좌측, %)", marker_color='purple', opacity=0.3), row=6, col=1, secondary_y=False)
+            fig.add_trace(go.Scatter(x=df.index, y=df['PG_Ratio_20m_True'], mode='lines', name="20평균 관여율(우측, %)", line=dict(color='orange', width=2.5)), row=6, col=1, secondary_y=True)
+            fig.add_trace(go.Scatter(x=df.index, y=df['PG_Ratio_60m_True'], mode='lines', name="60평균 관여율(우측, %)", line=dict(color='green', width=2.5)), row=6, col=1, secondary_y=True)
+
             # ==============================================================================
-            # ⭐️ 6층: 프로그램 관여율 (이중 축 + 60이평 추가)
+            # ⭐️ [추가] 차트 세부 설정 (이격 최소 빨간선 표시 & 숫자 포맷 변경)
             # ==============================================================================
-            # 1분 관여율 (막대 그래프) -> 왼쪽 축
-            fig.add_trace(go.Bar(
-                x=df.index, y=df['PG_Ratio_1m'], 
-                name="1분 관여율(좌측, %)", marker_color='purple', opacity=0.3
-            ), row=6, col=1, secondary_y=False)
             
-            # 20분 평균 관여율 (꺾은선 그래프) -> 오른쪽 축
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df['PG_Ratio_20m_True'], 
-                mode='lines', name="20평균 관여율(우측, %)", line=dict(color='orange', width=2.5)
-            ), row=6, col=1, secondary_y=True)
+            # 1. 빨간색 세로 점선 추가 (이격이 가장 좁았던 지점)
+            if min_gap_time:
+                for r in [4, 5]: # 창구1(4층)과 창구2(5층)에 수직선을 긋습니다.
+                    fig.add_vline(x=min_gap_time, line_width=2, line_dash="dash", line_color="red", row=r, col=1)
+                
+                # 텍스트 주석 추가 (어디가 맥점인지 표시)
+                fig.add_annotation(x=min_gap_time, y=0, text="이격최소(맥점)", showarrow=True, arrowhead=1, ax=0, ay=-30, row=4, col=1)
 
-            # ⭐️ 60분 평균 관여율 (꺾은선 그래프) -> 오른쪽 축 추가
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df['PG_Ratio_60m_True'], 
-                mode='lines', name="60평균 관여율(우측, %)", line=dict(color='green', width=2.5) # 초록색으로 설정
-            ), row=6, col=1, secondary_y=True)
+            # 2. 모든 Y축 숫자 포맷 설정 (k, M 대신 있는 그대로의 숫자 + 콤마 표시)
+            fig.update_yaxes(tickformat=",")
 
-            # 차트 레이아웃 업데이트
+            # 3. 레이아웃 마무리 업데이트
             fig.update_layout(height=1500, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
-
-            # 모든 Y축(세로축)의 숫자를 생략 없이(k 사용 안 함) 콤마 포맷으로 표시
-            fig.update_yaxes(tickformat=",")
-            # 6층 우측 축 0 기준 고정
+            
+            # 6층 우측 축은 % 단위이므로 0부터 시작하게 고정
             fig.update_yaxes(rangemode="tozero", row=6, col=1, secondary_y=True)
 
+            # 최종 차트 출력
             st.plotly_chart(fig, use_container_width=True)
             # ==============================================================================
 
