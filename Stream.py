@@ -296,42 +296,47 @@ if auth_token and len(stock_number) == 6:
             df['PG_Ratio_60m_True'] = (df['PG_60m_Sum'] / df['Vol_60m_Sum'].replace(0, pd.NA)).fillna(0) * 100 
 
             # ==============================================================================
-            # ⭐️ [최종 완성] 사용자님의 '추세 에너지 변곡점(Trend Exhaustion)' 지표
+            # ⭐️ [최종 완성] 사용자님의 '수정 논리 1 (뺄셈)' 기반 추세 변곡점 지표
             # ==============================================================================
-            # 1. 각 창구의 실시간 누적 최대값(Max)과 최소값(Min) 계산 (장 시작부터 현재 시간까지)
+            # 1. 각 창구의 실시간 누적 최대값(Max)과 최소값(Min) 계산
             df['brk1_max'] = df['Cum_Net_brk1'].expanding().max()
             df['brk1_min'] = df['Cum_Net_brk1'].expanding().min()
             df['brk2_max'] = df['Cum_Net_brk2'].expanding().max()
             df['brk2_min'] = df['Cum_Net_brk2'].expanding().min()
 
-            # 2. 누가 '내려오는 쪽'이고 누가 '올라오는 쪽'인지 판별 (사용자님 공식)
-            # Score = (MAX - 현재) - (현재 - MIN) -> 이 값이 더 큰 쪽이 매도 에너지를 다 쓴 '내려오는 쪽'
+            # 2. 누가 '내려오는 쪽'이고 누가 '올라오는 쪽'인지 판별
+            # (MAX-현재) - (현재-MIN) 값이 큰 쪽이 고점에서 많이 밀려 내려온 '매도 창구'
             df['brk1_score'] = (df['brk1_max'] - df['Cum_Net_brk1']) - (df['Cum_Net_brk1'] - df['brk1_min'])
             df['brk2_score'] = (df['brk2_max'] - df['Cum_Net_brk2']) - (df['Cum_Net_brk2'] - df['brk2_min'])
-
             condition_brk1_desc = df['brk1_score'] > df['brk2_score']
 
-            # 3. 사용자님의 최종 공식 적용
-            # 내려오는 쪽의 (MAX - 현재)
+            # 3. ⭐️ 사용자님의 '수정 논리 1 (뺄셈)' 적용
+            # 내려오는 쪽의 낙폭 (우리는 이 값이 크길 원함)
             desc_drop = np.where(condition_brk1_desc, df['brk1_max'] - df['Cum_Net_brk1'], df['brk2_max'] - df['Cum_Net_brk2'])
-            # 올라오는 쪽의 (현재 - MIN)
+            # 올라오는 쪽의 상승폭 (우리는 이 값이 작길 원함)
             asc_rise = np.where(condition_brk1_desc, df['Cum_Net_brk2'] - df['brk2_min'], df['Cum_Net_brk1'] - df['brk1_min'])
 
-            # 최종 지표 = 둘을 더함 (사용자님 요청)
-            df['Trend_Exhaustion_Metric'] = desc_drop + asc_rise
+            # 최종 지표 = [내려온 폭] - [올라간 폭]
+            df['Trend_Exhaustion_Metric'] = desc_drop - asc_rise
 
             # 4. 공식의 값이 '당일 최고'인 구간 찾기 (빨간색 강조)
             valid_df = df.between_time('09:05', '15:20')
             if not valid_df.empty:
-                # 딱 1분이 아니라 수렴하는 구간 전체를 보기 위해 당일 최고값의 90% 이상인 구간을 모두 칠함 (오차 10% 허용)
+                # 뺄셈 지표가 가장 높게 치솟는 구간(상위 10% 이내)을 맥점으로 판별
                 metric_max = valid_df['Trend_Exhaustion_Metric'].max()
-                df['Is_Macjum_Zone'] = df['Trend_Exhaustion_Metric'] >= (metric_max * 0.90)
+                
+                # 만약 metric_max가 음수이거나 너무 작으면 무시 (최소한의 변동성 담보)
+                if metric_max > 500:
+                    df['Is_Macjum_Zone'] = df['Trend_Exhaustion_Metric'] >= (metric_max * 0.90)
+                else:
+                    df['Is_Macjum_Zone'] = False
             else:
                 df['Is_Macjum_Zone'] = False
 
-            # 빨간색 덧칠을 위한 데이터 분리
+            # 5. 빨간색 덧칠을 위한 데이터 분리
             df['brk1_Red'] = df['Cum_Net_brk1'].where(df['Is_Macjum_Zone'], pd.NA)
             df['brk2_Red'] = df['Cum_Net_brk2'].where(df['Is_Macjum_Zone'], pd.NA)
+            # ==============================================================================
             # ==============================================================================
 
             # 📊 차트 그리기 (6단)
