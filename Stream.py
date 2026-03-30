@@ -431,15 +431,23 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m'], name="PG 매도", marker_color='#0066ff', opacity=0.7), row=3, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net'], mode='lines', name="PG 누적(우측)", line=dict(color='black', width=2.5)), row=3, col=1, secondary_y=True)
 
-            # 4층: 창구 1 (선택한 첫 번째 증권사)
-            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk1'], name=f"{selected_broker_name1} 매수", marker_color='#ff4d4d', opacity=0.7), row=4, col=1, secondary_y=False)
-            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk1'], name=f"{selected_broker_name1} 매도", marker_color='#0066ff', opacity=0.7), row=4, col=1, secondary_y=False)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk1'], mode='lines', name=f"{selected_broker_name1} 누적(우측)", line=dict(color='black', width=2.5)), row=4, col=1, secondary_y=True)
+            # --- 4층: 창구 1 (이 부분을 통째로 교체하세요) ---
+            # 기본 검은색 선
+            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk1'], mode='lines', name=f"{selected_broker_name1} 누적", line=dict(color='black', width=1.5)), row=4, col=1, secondary_y=True)
+            # ⭐️ 맥점일 때만 그려지는 두꺼운 빨간색 선
+            fig.add_trace(go.Scatter(x=df.index, y=df['brk1_Red'], mode='lines+markers', name="맥점(창구1)", line=dict(color='red', width=4), marker=dict(size=6, color='red')), row=4, col=1, secondary_y=True)
+            # 막대 그래프 (매수/매도)는 기존처럼 유지
+            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk1'], name="매수", marker_color='#ff4d4d', opacity=0.7), row=4, col=1, secondary_y=False)
+            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk1'], name="매도", marker_color='#0066ff', opacity=0.7), row=4, col=1, secondary_y=False)
 
-            # 5층: 창구 2 (선택한 두 번째 증권사)
-            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk2'], name=f"{selected_broker_name2} 매수", marker_color='#ff4d4d', opacity=0.7), row=5, col=1, secondary_y=False)
-            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.7), row=5, col=1, secondary_y=False)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적(우측)", line=dict(color='black', width=2.5)), row=5, col=1, secondary_y=True)
+            # --- 5층: 창구 2 (이 부분도 통째로 교체하세요) ---
+            # 기본 검은색 선
+            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적", line=dict(color='black', width=1.5)), row=5, col=1, secondary_y=True)
+            # ⭐️ 맥점일 때만 그려지는 두꺼운 빨간색 선
+            fig.add_trace(go.Scatter(x=df.index, y=df['brk2_Red'], mode='lines+markers', name="맥점(창구2)", line=dict(color='red', width=4), marker=dict(size=6, color='red')), row=5, col=1, secondary_y=True)
+            # 막대 그래프 유지
+            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk2'], name="매수", marker_color='#ff4d4d', opacity=0.7), row=5, col=1, secondary_y=False)
+            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name="매도", marker_color='#0066ff', opacity=0.7), row=5, col=1, secondary_y=False)
 
             # 6층: 프로그램 관여율
             fig.add_trace(go.Bar(x=df.index, y=df['PG_Ratio_1m'], name="1분 관여율(좌측, %)", marker_color='purple', opacity=0.3), row=6, col=1, secondary_y=False)
@@ -468,7 +476,8 @@ if auth_token and len(stock_number) == 6:
             
             # 6층 우측 축은 % 단위이므로 0부터 시작하게 고정
             fig.update_yaxes(rangemode="tozero", row=6, col=1, secondary_y=True)
-
+            fig.update_yaxes(tickformat=",") # k, M 없이 콤마 찍힌 숫자로 표시
+            st.plotly_chart(fig, use_container_width=True)
             # 최종 차트 출력
             st.plotly_chart(fig, use_container_width=True)
             # ==============================================================================
