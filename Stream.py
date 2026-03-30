@@ -276,21 +276,27 @@ if auth_token and len(stock_number) == 6:
 
             if pg_raw:
                 df_pg = pd.DataFrame(pg_raw)
-                df_pg['Datetime'] = pd.to_datetime(target_date_str + df_pg['tm'], format='%Y%m%d%H%M%S').dt.floor('min')
-                def clean_num(s): return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
-                df_pg['Cum_Buy'] = clean_num(df_pg['prm_buy_qty'])
-                df_pg['Cum_Sell'] = clean_num(df_pg['prm_sell_qty'])
                 
-                df_pg = df_pg.sort_values('Datetime')
-                df_pg_min = df_pg.groupby('Datetime').agg({'Cum_Buy': 'last', 'Cum_Sell': 'last'})
-                df_pg_min['Buy_1m'] = df_pg_min['Cum_Buy'].diff().fillna(df_pg_min['Cum_Buy']).clip(lower=0)
-                df_pg_min['Sell_1m'] = df_pg_min['Cum_Sell'].diff().fillna(df_pg_min['Cum_Sell']).clip(lower=0)
-                df_pg_min['Cum_Net'] = df_pg_min['Cum_Buy'] - df_pg_min['Cum_Sell']
-                
-                df = df.join(df_pg_min[['Buy_1m', 'Sell_1m', 'Cum_Net']], how='left')
-                df['Cum_Net'] = df['Cum_Net'].ffill().fillna(0) 
-                df['Buy_1m'] = df['Buy_1m'].fillna(0)          
-                df['Sell_1m'] = df['Sell_1m'].fillna(0)
+                # ⭐️ [추가된 부분] 'tm' (시간) 컬럼이 제대로 들어왔는지 검사!
+                if 'tm' in df_pg.columns and not df_pg.empty:
+                    df_pg['Datetime'] = pd.to_datetime(target_date_str + df_pg['tm'], format='%Y%m%d%H%M%S').dt.floor('min')
+                    def clean_num(s): return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
+                    df_pg['Cum_Buy'] = clean_num(df_pg['prm_buy_qty'])
+                    df_pg['Cum_Sell'] = clean_num(df_pg['prm_sell_qty'])
+                    
+                    df_pg = df_pg.sort_values('Datetime')
+                    df_pg_min = df_pg.groupby('Datetime').agg({'Cum_Buy': 'last', 'Cum_Sell': 'last'})
+                    df_pg_min['Buy_1m'] = df_pg_min['Cum_Buy'].diff().fillna(df_pg_min['Cum_Buy']).clip(lower=0)
+                    df_pg_min['Sell_1m'] = df_pg_min['Cum_Sell'].diff().fillna(df_pg_min['Cum_Sell']).clip(lower=0)
+                    df_pg_min['Cum_Net'] = df_pg_min['Cum_Buy'] - df_pg_min['Cum_Sell']
+                    
+                    df = df.join(df_pg_min[['Buy_1m', 'Sell_1m', 'Cum_Net']], how='left')
+                    df['Cum_Net'] = df['Cum_Net'].ffill().fillna(0) 
+                    df['Buy_1m'] = df['Buy_1m'].fillna(0)          
+                    df['Sell_1m'] = df['Sell_1m'].fillna(0)
+                else:
+                    # ⭐️ 데이터가 이상하면 안전하게 0으로 채움
+                    df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0
             else:
                 df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0
 
