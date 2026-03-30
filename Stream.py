@@ -152,7 +152,14 @@ if auth_token and len(stock_number) == 6:
 
         if c_raw:
             df = pd.DataFrame(c_raw)
-            df['Datetime'] = pd.to_datetime(df['stk_cntr_tm'], format='%Y%m%d%H%M%S')
+            if 'cntr_tm' in df.columns:
+    df['Datetime'] = pd.to_datetime(df['cntr_tm'], format='%Y%m%d%H%M%S')
+elif 'stk_cntr_tm' in df.columns:
+    df['Datetime'] = pd.to_datetime(df['stk_cntr_tm'], format='%Y%m%d%H%M%S')
+else:
+    # 어떤 열 이름도 찾을 수 없을 때를 위한 방어 로직
+    st.error(f"시간 정보(열)를 찾을 수 없습니다. 현재 열 이름: {list(df.columns)}")
+    st.stop()
             df.set_index('Datetime', inplace=True)
             df = df[df.index.strftime('%Y%m%d') == target_date_str].sort_index()
             if df.empty: st.info("장 시작 전입니다."); st.stop()
