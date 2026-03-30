@@ -364,7 +364,26 @@ if auth_token and len(stock_number) == 6:
             # 4. 진짜 20분 & 60분 평균 관여율 (%)
             df['PG_Ratio_20m_True'] = (df['PG_20m_Sum'] / df['Vol_20m_Sum'].replace(0, pd.NA)).fillna(0) * 100
             df['PG_Ratio_60m_True'] = (df['PG_60m_Sum'] / df['Vol_60m_Sum'].replace(0, pd.NA)).fillna(0) * 100
+            # --- 60분 관여율 계산 줄 바로 아래에 붙여넣기 시작 ---
+            
+            # 1. 두 창구의 이격 계산 (abs(1-2))
+            df['Broker_Gap'] = (df['Cum_Net_brk1'] - df['Cum_Net_brk2']).abs()
+            
+            # 2. 9시 5분 이후 데이터 중 현재까지의 '최소 이격' 찾기
+            valid_df = df.between_time('09:05', '15:20')
+            if not valid_df.empty:
+                current_min = valid_df['Broker_Gap'].min()
+                # ⭐️ 사용자님 포인트: 이격이 최소값과 같거나 아주 근접할 때(오차 5% 이내) 빨간색 구간으로 인정
+                df['Is_Min_Zone'] = df['Broker_Gap'] <= (current_min * 1.05) 
+            else:
+                df['Is_Min_Zone'] = False
 
+            # 3. 빨간색으로 덧칠할 데이터 생성 (조건 안 맞으면 None 처리해서 안 그려지게 함)
+            df['brk1_Red'] = df['Cum_Net_brk1'].where(df['Is_Min_Zone'], pd.NA)
+            df['brk2_Red'] = df['Cum_Net_brk2'].where(df['Is_Min_Zone'], pd.NA)
+
+            # --- 여기까지 붙여넣기 끝 ---
+            
             # ==============================================================================
             # ⭐️ [추가] 두 창구(Broker 1 & 2) 이격 계산 및 최소 지점 찾기
             # ==============================================================================
