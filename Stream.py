@@ -385,116 +385,117 @@ if auth_token and len(stock_number) == 6:
             # 4. 진짜 20분 & 60분 평균 관여율 (%)
             df['PG_Ratio_20m_True'] = (df['PG_20m_Sum'] / df['Vol_20m_Sum'].replace(0, pd.NA)).fillna(0) * 100
             df['PG_Ratio_60m_True'] = (df['PG_60m_Sum'] / df['Vol_60m_Sum'].replace(0, pd.NA)).fillna(0) * 100 # ⭐️ 60분 관여율 추가
-
-# ==============================================================================
-            # ⭐️ [신규 로직] 창구 교차 에너지 지표 계산
             # ==============================================================================
-            # 1. 창구 1, 2의 실시간 Max/Min 계산
+            # ⭐️ 1. 창구 교차 에너지(Signal Value) 및 가변 임계치(T) 계산
+            # ==============================================================================
+            # 실시간 최고/최저가 추적
             df['Max1'] = df['Cum_Net_brk1'].expanding().max()
             df['Min1'] = df['Cum_Net_brk1'].expanding().min()
             df['Max2'] = df['Cum_Net_brk2'].expanding().max()
             df['Min2'] = df['Cum_Net_brk2'].expanding().min()
 
-            # 2. 위치값(Pos) 계산
+            # 위치값(Pos) 계산
             df['Pos1'] = (df['Max1'] - df['Cum_Net_brk1']) - (df['Cum_Net_brk1'] - df['Min1'])
             df['Pos2'] = (df['Max2'] - df['Cum_Net_brk2']) - (df['Cum_Net_brk2'] - df['Min2'])
 
-            # 3. 조건에 따른 Value 계산
+            # Signal_Value 계산 (요청하신 공식 적용)
             df['Signal_Value'] = 0.0
-            mask1 = df['Pos1'] > df['Pos2']
-            df.loc[mask1, 'Signal_Value'] = (df['Max1'] - df['Cum_Net_brk1']) + (df['Cum_Net_brk2'] - df['Min2'])
-            df.loc[~mask1, 'Signal_Value'] = (df['Max2'] - df['Cum_Net_brk2']) + (df['Cum_Net_brk1'] - df['Min1'])
+            mask_p = df['Pos1'] > df['Pos2']
+            df.loc[mask_p, 'Signal_Value'] = (df['Max1'] - df['Cum_Net_brk1']) + (df['Cum_Net_brk2'] - df['Min2'])
+            df.loc[~mask_p, 'Signal_Value'] = (df['Max2'] - df['Cum_Net_brk2']) + (df['Cum_Net_brk1'] - df['Min1'])
 
-            # 4. 당일 최고치 경신 여부 확인 (신고가 갱신 시점에만 값 남기기)
-            df['Value_Max'] = df['Signal_Value'].expanding().max()
-            # 신고가를 경신하는 그 '순간'만 추출 (나머지는 NaN 처리해서 차트에 안 보이게 함)
-            df['Signal_Point'] = df.apply(lambda x: x['Signal_Value'] if x['Signal_Value'] == x['Value_Max'] and x['Signal_Value'] > 0 else pd.NA, axis=1)
+            # --- 가변 임계치(T)를 이용한 Red/Blue 포인트 추출 루프 ---
+            last_rp_val = 0.0      # 최근 빨간 점의 지표값
+            lowest_after_rp = 0.0  # 빨간 점 이후의 최저 지표값
+            threshold_T = 0.0      # 임계치 (이전 파동의 하락 깊이)
+
+            red_signals = [None] * len(df)
+            blue_signals = [None] * len(df)
+            sv_list = df['Signal_Value'].values
+
+            for i in range(len(df)):
+                v = sv_list[i]
+                if v > last_rp_val:
+                    # 새로운 고점(빨간 점) 갱신 시점에 T 업데이트
+                    # T = (직전 빨간 점 지표값) - (그 사이의 최저 지표값)
+                    if last_rp_val > 0 and lowest_after_rp < last_rp_val:
+                        threshold_T = last_rp_val - lowest_after_rp
+                    
+                    last_rp_val = v
+                    lowest_after_rp = v # 최저점 추적 초기화
+                    red_signals[i] = v
+                
+                elif v < last_rp_val:
+                    # 파란 점 판단: 임계치 T보다 더 크게 하락했는가?
+                    is_blue = False
+                    if threshold_T > 0:
+                        if v < (last_rp_val - threshold_T):
+                            is_blue = True
+                    else:
+                        is_blue = True # T가 없는 극초반에는 하락 시 무조건 표시
+                    
+                    if is_blue:
+                        blue_signals[i] = v
+                        if v < lowest_after_rp:
+                            lowest_after_rp = v
+
+            df['Sig_Red'] = red_signals
+            df['Sig_Blue'] = blue_signals
+
             # ==============================================================================
-            # 📊 차트 그리기 (6단)
+            # 📊 2. 6단 차트 생성 및 시각화
             # ==============================================================================
             fig = make_subplots(
                 rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
                 row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2], 
                 subplot_titles=(
-                    "가격 (한국식 컬러)", 
-                    "거래량", 
-                    "프로그램 수급", 
-                    f"{selected_broker_name1} 수급", 
-                    f"{selected_broker_name2} 수급",
-                    "프로그램 관여율 (막대:1분, 선:20/60 가중평균)" # ⭐️ 제목 수정
+                    "가격 (Candlestick)", "거래량", "프로그램 수급", 
+                    f"{selected_broker_name1} 수급 (RP/BP)", f"{selected_broker_name2} 수급 (RP/BP)",
+                    "프로그램 관여율 (막대:1분, 선:20/60 가중평균)"
                 ),
-                specs=[
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}],
-                    [{"secondary_y": True}]
-                ] 
+                specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": True}], 
+                       [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}]]
             )
 
             # 1층: 가격
-            fig.add_trace(go.Candlestick(
-                x=df.index, open=df['open_pric'], high=df['high_pric'], low=df['low_pric'], close=df['cur_prc'],
-                name="가격", increasing_line_color='#ff4d4d', increasing_fillcolor='#ff4d4d', decreasing_line_color='#0066ff', decreasing_fillcolor='#0066ff' 
-            ), row=1, col=1)
+            fig.add_trace(go.Candlestick(x=df.index, open=df['open_pric'], high=df['high_pric'], low=df['low_pric'], close=df['cur_prc'], name="가격"), row=1, col=1)
 
-            # 2층: 일반 거래량
+            # 2층: 거래량
             vol_colors = ['#ff4d4d' if c >= o else '#0066ff' for c, o in zip(df['cur_prc'], df['open_pric'])]
             fig.add_trace(go.Bar(x=df.index, y=df['trde_qty'], name="거래량", marker_color=vol_colors), row=2, col=1)
-            
-            # 3층: PG
-            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m'], name="PG 매수", marker_color='#ff4d4d', opacity=0.7), row=3, col=1, secondary_y=False)
-            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m'], name="PG 매도", marker_color='#0066ff', opacity=0.7), row=3, col=1, secondary_y=False)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net'], mode='lines', name="PG 누적(우측)", line=dict(color='black', width=2.5)), row=3, col=1, secondary_y=True)
 
-            # 4층: 창구 1
-            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk1'], name=f"{selected_broker_name1} 매수", marker_color='#ff4d4d', opacity=0.4), row=4, col=1, secondary_y=False)
-            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk1'], name=f"{selected_broker_name1} 매도", marker_color='#0066ff', opacity=0.4), row=4, col=1, secondary_y=False)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk1'], mode='lines', name=f"{selected_broker_name1} 누적", line=dict(color='black', width=2)), row=4, col=1, secondary_y=True)
-            # ⭐️ 빨간선(점) 표시: 신호가 발생한 지점의 검정선 위에 빨간 점 찍기
-            fig.add_trace(go.Scatter(x=df.index, y=df.apply(lambda r: r['Cum_Net_brk1'] if not pd.isna(r['Signal_Point']) else pd.NA, axis=1), 
-                                     mode='markers', name="신호(창구1)", marker=dict(color='red', size=6)), row=4, col=1, secondary_y=True)
+            # 3층: 프로그램 수급
+            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m'], name="PG 매수", marker_color='#ff4d4d', opacity=0.5), row=3, col=1, secondary_y=False)
+            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m'], name="PG 매도", marker_color='#0066ff', opacity=0.5), row=3, col=1, secondary_y=False)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net'], mode='lines', name="PG 누적", line=dict(color='black', width=2)), row=3, col=1, secondary_y=True)
 
-            # 5층: 창구 2
-            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk2'], name=f"{selected_broker_name2} 매수", marker_color='#ff4d4d', opacity=0.4), row=5, col=1, secondary_y=False)
-            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.4), row=5, col=1, secondary_y=False)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적", line=dict(color='black', width=2)), row=5, col=1, secondary_y=True)
-            # ⭐️ 빨간선(점) 표시: 신호가 발생한 지점의 검정선 위에 빨간 점 찍기
-            fig.add_trace(go.Scatter(x=df.index, y=df.apply(lambda r: r['Cum_Net_brk2'] if not pd.isna(r['Signal_Point']) else pd.NA, axis=1), 
-                                     mode='markers', name="신호(창구2)", marker=dict(color='red', size=6)), row=5, col=1, secondary_y=True)
+            # 4층 & 5층: 거래원 수급 (창구 1, 2)
+            # 루프를 돌려 중복 코드를 줄이고 가독성을 높였습니다.
+            for row_num, suffix, b_name in [(4, 'brk1', selected_broker_name1), (5, 'brk2', selected_broker_name2)]:
+                # 막대 그래프 (매수/매도)
+                fig.add_trace(go.Bar(x=df.index, y=df[f'Buy_1m_{suffix}'], name=f"{b_name} 매수", marker_color='#ff4d4d', opacity=0.3), row=row_num, col=1, secondary_y=False)
+                fig.add_trace(go.Bar(x=df.index, y=-df[f'Sell_1m_{suffix}'], name=f"{b_name} 매도", marker_color='#0066ff', opacity=0.3), row=row_num, col=1, secondary_y=False)
+                
+                # 누적 순매수선 (검정선)
+                fig.add_trace(go.Scatter(x=df.index, y=df[f'Cum_Net_{suffix}'], mode='lines', name=f"{b_name} 누적", line=dict(color='black', width=2)), row=row_num, col=1, secondary_y=True)
+                
+                # ⭐️ 신호 점 (검정선 위치에 표시)
+                # Sig_Red/Blue가 None이 아닌 시점의 Cum_Net 값을 가져와서 점을 찍습니다.
+                red_y = [df[f'Cum_Net_{suffix}'].iloc[i] if df['Sig_Red'].iloc[i] is not None else None for i in range(len(df))]
+                blue_y = [df[f'Cum_Net_{suffix}'].iloc[i] if df['Sig_Blue'].iloc[i] is not None else None for i in range(len(df))]
+                
+                fig.add_trace(go.Scatter(x=df.index, y=red_y, mode='markers', name="강세신호", marker=dict(color='red', size=7, symbol='circle')), row=row_num, col=1, secondary_y=True)
+                fig.add_trace(go.Scatter(x=df.index, y=blue_y, mode='markers', name="약세신호", marker=dict(color='blue', size=7, symbol='circle')), row=row_num, col=1, secondary_y=True)
 
-            # ==============================================================================
-            # ⭐️ 6층: 프로그램 관여율 (이중 축 + 60이평 추가)
-            # ==============================================================================
-            # 1분 관여율 (막대 그래프) -> 왼쪽 축
-            fig.add_trace(go.Bar(
-                x=df.index, y=df['PG_Ratio_1m'], 
-                name="1분 관여율(좌측, %)", marker_color='purple', opacity=0.3
-            ), row=6, col=1, secondary_y=False)
-            
-            # 20분 평균 관여율 (꺾은선 그래프) -> 오른쪽 축
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df['PG_Ratio_20m_True'], 
-                mode='lines', name="20평균 관여율(우측, %)", line=dict(color='orange', width=2.5)
-            ), row=6, col=1, secondary_y=True)
+            # 6층: 프로그램 관여율
+            fig.add_trace(go.Bar(x=df.index, y=df['PG_Ratio_1m'], name="1분 관여율", marker_color='purple', opacity=0.3), row=6, col=1, secondary_y=False)
+            fig.add_trace(go.Scatter(x=df.index, y=df['PG_Ratio_20m_True'], mode='lines', name="20평균", line=dict(color='orange', width=2)), row=6, col=1, secondary_y=True)
+            fig.add_trace(go.Scatter(x=df.index, y=df['PG_Ratio_60m_True'], mode='lines', name="60평균", line=dict(color='green', width=2)), row=6, col=1, secondary_y=True)
 
-            # ⭐️ 60분 평균 관여율 (꺾은선 그래프) -> 오른쪽 축 추가
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df['PG_Ratio_60m_True'], 
-                mode='lines', name="60평균 관여율(우측, %)", line=dict(color='green', width=2.5) # 초록색으로 설정
-            ), row=6, col=1, secondary_y=True)
-
-            # 차트 레이아웃 업데이트
-            fig.update_layout(height=1500, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
-            fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
-            fig.update_layout(xaxis_rangeslider_visible=False)
-
-            # 모든 Y축(세로축)의 숫자를 생략 없이(k 사용 안 함) 콤마 포맷으로 표시
+            # 차트 마무리 설정
+            fig.update_layout(height=1400, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False, xaxis_rangeslider_visible=False)
             fig.update_yaxes(tickformat=",")
-            # 6층 우측 축 0 기준 고정
-            fig.update_yaxes(rangemode="tozero", row=6, col=1, secondary_y=True)
-
+            
             st.plotly_chart(fig, use_container_width=True)
             # ==============================================================================
 
