@@ -109,7 +109,7 @@ def merge_api_data(old_data, new_data):
 # ----------------------------------------------------
 # 3. 메인 화면
 # ----------------------------------------------------
-st.set_page_config(page_title="수급 복기 v3.1", layout="wide")
+st.set_page_config(page_title="수급 복기 v3.2", layout="wide")
 st.title("🚀 실시간 주도주 & 거래원 수급 복기")
 
 if 'data_cache' not in st.session_state:
@@ -133,7 +133,6 @@ lag_sec = st.sidebar.slider("보정(초)", 0, 180, 60)
 
 if auth_token and len(stock_number) == 6:
     with st.spinner("데이터 수집 중..."):
-        # 캐시 관리
         cur_key = f"{stock_number}_{target_date_str}_{broker_dict[name1]}_{broker_dict[name2]}"
         if st.session_state.get('last_key') != cur_key:
             st.session_state['data_cache'] = {'pg':[], 'brk1':[], 'brk2':[]}
@@ -152,21 +151,23 @@ if auth_token and len(stock_number) == 6:
 
         if c_raw:
             df = pd.DataFrame(c_raw)
-            if 'cntr_tm' in df.columns:
-    df['Datetime'] = pd.to_datetime(df['cntr_tm'], format='%Y%m%d%H%M%S')
-elif 'stk_cntr_tm' in df.columns:
-    df['Datetime'] = pd.to_datetime(df['stk_cntr_tm'], format='%Y%m%d%H%M%S')
-else:
-    # 어떤 열 이름도 찾을 수 없을 때를 위한 방어 로직
-    st.error(f"시간 정보(열)를 찾을 수 없습니다. 현재 열 이름: {list(df.columns)}")
-    st.stop()
+            
+            # --- [에러 수정] 시간 컬럼 필드명 자동 감지 ---
+            time_field = 'cntr_tm' if 'cntr_tm' in df.columns else 'stk_cntr_tm'
+            if time_field in df.columns:
+                df['Datetime'] = pd.to_datetime(df[time_field], format='%Y%m%d%H%M%S')
+            else:
+                st.error("시간 정보를 찾을 수 없습니다.")
+                st.stop()
+            
             df.set_index('Datetime', inplace=True)
             df = df[df.index.strftime('%Y%m%d') == target_date_str].sort_index()
-            if df.empty: st.info("장 시작 전입니다."); st.stop()
+            if df.empty: st.info("선택한 날짜의 데이터가 아직 없습니다."); st.stop()
 
             for col in ['open_pric', 'high_pric', 'low_pric', 'cur_prc', 'trde_qty']:
                 df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[+,-]', '', regex=True), errors='coerce').fillna(0).astype(int)
 
+            # 거래원 처리 함수
             def process_brk(raw, lag):
                 if not raw: return pd.DataFrame()
                 db = pd.DataFrame(raw)
@@ -181,13 +182,12 @@ else:
                 res['acc_netprps'] = pd.to_numeric(res['acc_netprps'].astype(str).str.replace(r'[+,]', '', regex=True), errors='coerce').fillna(0)
                 return res
 
-            # 거래원 데이터 병합
             res1 = process_brk(st.session_state['data_cache']['brk1'], lag_sec)
             res2 = process_brk(st.session_state['data_cache']['brk2'], lag_sec)
             df = df.join(res1.rename(columns={'B':'B1','S':'S1','acc_netprps':'C1'}), how='left').fillna(0)
             df = df.join(res2.rename(columns={'B':'B2','S':'S2','acc_netprps':'C2'}), how='left').fillna(0)
 
-            # --- [핵심] Signal Value & T 로직 ---
+            # --- Signal Value & T 로직 ---
             df['M1'] = df['C1'].expanding().max(); df['m1'] = df['C1'].expanding().min()
             df['M2'] = df['C2'].expanding().max(); df['m2'] = df['C2'].expanding().min()
             df['P1'] = (df['M1'] - df['C1']) - (df['C1'] - df['m1'])
@@ -224,10 +224,11 @@ else:
             
             # 창구 1, 2 그리기
             for row_idx, pref, c_name in [(4, '1', name1), (5, '2', name2)]:
-                fig.add_trace(go.Bar(x=df.index, y=df[f'B{pref}'], marker_color='#ff4d4d', opacity=0.3), row=row_idx, col=1, secondary_y=False)
-                fig.add_trace(go.Bar(x=df.index, y=-df[f'S{pref}'], marker_color='#0066ff', opacity=0.3), row=row_idx, col=1, secondary_y=False)
+                fig.add_trace(go.Bar(x=df.index, y=df[f'B{pref}'], marker_color='#ff4d4d', opacity=0.3, name=f"{c_name} 매수"), row=row_idx, col=1, secondary_y=False)
+                fig.add_trace(go.Bar(x=df.index, y=-df[f'S{pref}'], marker_color='#0066ff', opacity=0.3, name=f"{c_name} 매도"), row=row_idx, col=1, secondary_y=False)
                 fig.add_trace(go.Scatter(x=df.index, y=df[f'C{pref}'], line=dict(color='black', width=2), name=f"{c_name} 누적"), row=row_idx, col=1, secondary_y=True)
-                # 신호 점 (None이 아닌 경우만 표시됨)
+                
+                # 신호 점 표시
                 r_pts = [df[f'C{pref}'].iloc[i] if df['Sig_R'].iloc[i] is not None else None for i in range(len(df))]
                 b_pts = [df[f'C{pref}'].iloc[i] if df['Sig_B'].iloc[i] is not None else None for i in range(len(df))]
                 fig.add_trace(go.Scatter(x=df.index, y=r_pts, mode='markers', marker=dict(color='red', size=7), name="강세"), row=row_idx, col=1, secondary_y=True)
