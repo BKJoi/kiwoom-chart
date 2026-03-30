@@ -1,14 +1,13 @@
 import streamlit as st
 import requests
 import pandas as pd
-import numpy as np # ⭐️ 사용자님의 수학적 판별식을 위해 추가된 라이브러리
 import time
 from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # 1. URL은 숨길 필요가 없으므로 직접 입력 (모의투자 또는 실투자 URL)
-host_url = "https://mockapi.kiwoom.com" 
+host_url = "https://mockapi.kiwoom.com" # 또는 모의투자 URL
 
 # 2. 내 진짜 키값은 Streamlit의 안전한 금고(secrets)에서 불러오기!
 app_key = st.secrets["APP_KEY"]
@@ -19,13 +18,30 @@ app_secret = st.secrets["APP_SECRET"]
 # ----------------------------------------------------
 @st.cache_data(ttl=3600)
 def get_access_token():
+    # 토큰 발급 경로는 /oauth2/token 입니다.
     url = f"{host_url}/oauth2/token"
-    headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "au10001"}
-    data = {"grant_type": "client_credentials", "appkey": app_key, "secretkey": app_secret}
+    
+    # 🚨 중요: 키움 API는 api-id를 헤더에 넣어야 할 때가 있습니다.
+    headers = {
+        "Content-Type": "application/json;charset=UTF-8",
+        "api-id": "au10001" 
+    }
+    
+    data = {
+        "grant_type": "client_credentials", 
+        "appkey": app_key, 
+        "secretkey": app_secret
+    }
+    
     response = requests.post(url, headers=headers, json=data)
+    
+    # 404가 계속 뜬다면, 혹시 host_url 끝에 /가 붙어있지는 않은지 확인해보세요.
     if response.status_code != 200:
         st.error(f"토큰 발급 실패! 상태 코드: {response.status_code}")
+        # 만약 여전히 404라면, host_url을 "https://api.kiwoom.com"으로 바꿔서 시도해보세요.
+        # (인증 서버는 실전/모의 공용일 수 있습니다.)
         return None
+        
     return response.json().get('token')
 
 @st.cache_data(ttl=86400) 
@@ -37,6 +53,8 @@ def get_broker_list(token):
     broker_dict = {}
     if "list" in data:
         for item in data["list"]: 
+            # ⭐️ 기존: broker_dict[item["name"]] = item["code"]
+            # ⭐️ 수정: 화면에 보여줄 글자를 "신한투자증권(002)" 형태로 만듭니다.
             display_name = f"{item['name']}({item['code']})"
             broker_dict[display_name] = item["code"]
     return broker_dict
@@ -60,67 +78,93 @@ def get_historical_minute_chart(token, stock_code):
         time.sleep(0.5) 
     return all_chart_data
 
-def get_historical_program_data(token, stock_code, target_date, max_pages=1500): 
+# ----------------------------------------------------
+# 강화된 데이터 수집 함수 (9시까지 끝까지 추적)
+# ----------------------------------------------------
+
+def get_historical_program_data(token, stock_code, target_date, max_pages=1500): # ⭐️ 1500페이지로 상향
     url = f"{host_url}/api/dostk/mrkcond"
     all_data = []
     next_key = ""
     retry_count = 0 
+    
     for i in range(max_pages): 
         headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "ka90008", "authorization": f"Bearer {token}"}
         if next_key: headers.update({"cont-yn": "Y", "tr-cont": "Y", "next-key": next_key, "tr-cont-key": next_key})
+        
         req_data = {"amt_qty_tp": "2", "stk_cd": stock_code, "date": target_date}
         response = requests.post(url, headers=headers, json=req_data)
+        
         if response.status_code != 200:
-            time.sleep(2) 
+            time.sleep(2) # ⭐️ 차단 회피를 위해 조금 더 쉽니다
             continue
+            
         res_json = response.json()
         chunk = res_json.get('stk_tm_prm_trde_trnsn', [])
+        
         if not chunk:
             retry_count += 1
-            if retry_count > 3: break 
+            if retry_count > 3: break # 3번 연속 없으면 진짜 끝
             time.sleep(0.5)
             continue
+        
         retry_count = 0
         all_data.extend(chunk)
+        
+        # 9시 도달 체크 (데이터가 09:00:00 이하로 내려가면 탈출)
         last_time = chunk[-1].get('tm', '')
-        if last_time and last_time <= "090000": break
+        if last_time and last_time <= "090000":
+            break
+            
         next_key = response.headers.get('next-key', response.headers.get('tr-cont-key', ''))
         if not next_key: break
         time.sleep(0.1) 
     return all_data
 
-def get_historical_broker_data(token, stock_code, brk_code, max_pages=1500):
+def get_historical_broker_data(token, stock_code, brk_code, max_pages=1500): # ⭐️ 1500페이지로 상향
     url = f"{host_url}/api/dostk/stkinfo"
     all_data = []
     next_key = ""
     retry_count = 0
+    
     for i in range(max_pages):
         headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "ka10052", "authorization": f"Bearer {token}"}
         if next_key: headers.update({"cont-yn": "Y", "tr-cont": "Y", "next-key": next_key, "tr-cont-key": next_key})
+        
         req_data = {"mmcm_cd": brk_code, "stk_cd": stock_code, "mrkt_tp": "0", "qty_tp": "0", "pric_tp": "0", "stex_tp": "1"}
         response = requests.post(url, headers=headers, json=req_data)
+        
         if response.status_code != 200:
             time.sleep(2)
             continue
+            
         res_json = response.json()
         chunk = res_json.get('trde_ori_mont_trde_qty', [])
+        
         if not chunk:
             retry_count += 1
             if retry_count > 3: break
             time.sleep(0.5)
             continue
+            
         retry_count = 0
         all_data.extend(chunk)
+        
         last_time = chunk[-1].get('tm', chunk[-1].get('stck_cntg_hour', ''))
-        if last_time and last_time <= "090000": break
+        if last_time and last_time <= "090000":
+            break
+            
         next_key = response.headers.get('next-key', response.headers.get('tr-cont-key', ''))
         if not next_key: break
         time.sleep(0.1)
     return all_data
-
+# ==============================================================================
+# ⭐️ 핵심 1. 증발 버그 해결: 동시간대 중복 방지 로직 (데이터의 고유 지문 활용)
+# ==============================================================================
 def merge_api_data(old_data, new_data):
     seen = set()
     merged = []
+    # 과거 데이터와 새 데이터를 더한 뒤, 텍스트 자체를 지문으로 써서 완벽한 녀석만 걸러냄
     for item in old_data + new_data:
         sig = str(item)
         if sig not in seen:
@@ -150,10 +194,12 @@ if auth_token:
     broker_names = list(broker_dict.keys())
     broker_names.sort() 
     
+    # ⭐️ "키움증권(" 으로 시작하는 항목의 위치(인덱스)를 자동으로 찾습니다.
     default_idx1 = next((i for i, name in enumerate(broker_names) if name.startswith("키움증권(")), 0)
     selected_broker_name1 = st.sidebar.selectbox("🔎 첫 번째 창구", broker_names, index=default_idx1)
     target_broker_code1 = broker_dict[selected_broker_name1]
 
+    # ⭐️ "신한투자증권(" 으로 시작하는 항목의 위치를 찾습니다.
     default_idx2 = next((i for i, name in enumerate(broker_names) if name.startswith("신한투자증권(")), 0)
     selected_broker_name2 = st.sidebar.selectbox("🔎 두 번째 창구", broker_names, index=default_idx2)
     target_broker_code2 = broker_dict[selected_broker_name2]
@@ -167,7 +213,9 @@ if auto_refresh and target_date_str != datetime.now().strftime('%Y%m%d'):
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🧹 오전 데이터 누락 시 클릭 (캐시 삭제)"):
+    # 캐시를 완전히 비워서 다음 실행 때 무조건 처음부터(500~1500페이지) 긁게 만듭니다.
     st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
+    # 검색 키까지 초기화해서 완전히 새 종목처럼 인식하게 합니다.
     if 'last_search_key' in st.session_state:
         del st.session_state['last_search_key']
     st.rerun()
@@ -230,6 +278,12 @@ if auth_token and len(stock_number) == 6:
             else:
                 df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0
 
+            # ==============================================================================
+            # ⭐️ 핵심 2. 키움증권 원본 데이터("매수", "매도") 완벽 판별기
+            # ==============================================================================
+            # ==============================================================================
+            # ⭐️ 거래원 데이터 완벽 파싱 (기호 + 글자 이중 체크 방어선)
+            # ==============================================================================
             def process_broker_data(raw_data, lag_sec, suffix):
                 if not raw_data:
                     return pd.DataFrame(columns=[f'Buy_1m_{suffix}', f'Sell_1m_{suffix}', f'Cum_Net_{suffix}'])
@@ -244,16 +298,21 @@ if auth_token and len(stock_number) == 6:
                 df_b['Datetime'] = df_b['Datetime'].dt.floor('min')
                 
                 if 'tp' in df_b.columns and 'mont_trde_qty' in df_b.columns:
+                    # 1. 수량 기호(-)와 tp 글자('매도')를 동시에 체크하여 절대 누락 없게 만들기
                     def parse_volume(row):
                         tp_str = str(row['tp'])
                         qty_str = str(row['mont_trde_qty']).replace(',', '')
+                        
+                        # 수량에 '-'가 붙어있거나, tp에 '매도'라는 글자가 있으면 무조건 매도!
                         if '-' in qty_str or '매도' in tp_str:
                             sell = int(qty_str.replace('-', '').replace('+', '')) if qty_str else 0
                             return 0, sell
+                        # 그 외에는 매수!
                         else:
                             buy = int(qty_str.replace('+', '').replace('-', '')) if qty_str else 0
                             return buy, 0
 
+                    # 2. 이중 방어 로직 적용
                     df_b[['Buy_Vol', 'Sell_Vol']] = df_b.apply(parse_volume, axis=1, result_type='expand')
                     
                     if 'acc_netprps' in df_b.columns:
@@ -261,6 +320,7 @@ if auth_token and len(stock_number) == 6:
                     else:
                         df_b['Net_Raw'] = 0
                         
+                    # 1분 단위 합산
                     df_b_min = df_b.groupby('Datetime').agg({'Buy_Vol': 'sum', 'Sell_Vol': 'sum', 'Net_Raw': 'last'})
                     df_b_min.rename(columns={'Buy_Vol': f'Buy_1m_{suffix}', 'Sell_Vol': f'Sell_1m_{suffix}', 'Net_Raw': f'Cum_Net_{suffix}'}, inplace=True)
                     return df_b_min[[f'Buy_1m_{suffix}', f'Sell_1m_{suffix}', f'Cum_Net_{suffix}']]
@@ -280,52 +340,31 @@ if auth_token and len(stock_number) == 6:
             df['Sell_1m_brk2'] = df['Sell_1m_brk2'].fillna(0)
             df['Cum_Net_brk2'] = df['Cum_Net_brk2'].ffill().fillna(0)
 
+            # 동시호가 제거 (이 위쪽은 그대로 둡니다)
             mask_outliers = df.index.strftime('%H%M').isin(['0900', '1530'])
             df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
 
+            # ==============================================================================
+            # ⭐️ 1+3번 아이디어 결합 + 60이평 추가: 거래량 가중 평균 관여율 계산
+            # ==============================================================================
+            # 1. 프로그램 1분 총합 (매수 + 매도)
             df['PG_Total_1m'] = df['Buy_1m'] + df['Sell_1m']
+            
+            # 2. 1분봉 프로그램 관여율 (%)
             df['PG_Ratio_1m'] = (df['PG_Total_1m'] / df['trde_qty'].replace(0, pd.NA)).fillna(0) * 100
             
+            # 3. 최근 20분 및 60분간의 전체 거래량 합산 & 프로그램 거래량 합산
             df['Vol_20m_Sum'] = df['trde_qty'].rolling(window=20, min_periods=1).sum()
             df['PG_20m_Sum'] = df['PG_Total_1m'].rolling(window=20, min_periods=1).sum()
             
-            df['Vol_60m_Sum'] = df['trde_qty'].rolling(window=60, min_periods=1).sum() 
-            df['PG_60m_Sum'] = df['PG_Total_1m'].rolling(window=60, min_periods=1).sum() 
+            df['Vol_60m_Sum'] = df['trde_qty'].rolling(window=60, min_periods=1).sum() # ⭐️ 60분 거래량 추가
+            df['PG_60m_Sum'] = df['PG_Total_1m'].rolling(window=60, min_periods=1).sum() # ⭐️ 60분 PG 추가
             
+            # 4. 진짜 20분 & 60분 평균 관여율 (%)
             df['PG_Ratio_20m_True'] = (df['PG_20m_Sum'] / df['Vol_20m_Sum'].replace(0, pd.NA)).fillna(0) * 100
-            df['PG_Ratio_60m_True'] = (df['PG_60m_Sum'] / df['Vol_60m_Sum'].replace(0, pd.NA)).fillna(0) * 100 
+            df['PG_Ratio_60m_True'] = (df['PG_60m_Sum'] / df['Vol_60m_Sum'].replace(0, pd.NA)).fillna(0) * 100 # ⭐️ 60분 관여율 추가
 
-            # ==============================================================================
-            # ⭐️ [최종 완성] 사용자님의 '당일 절대 맥점(투매 클라이막스)' 포착 로직
-            # ==============================================================================
-            # 1. '오늘 하루 전체'를 기준으로 창구 1과 2의 가장 높았던 산 꼭대기(Max)를 고정합니다.
-            max1_today = df['Cum_Net_brk1'].max()
-            max2_today = df['Cum_Net_brk2'].max()
 
-            # 2. 각 시간별로 산 꼭대기에서 얼마나 떨어졌는지 '낙폭'을 계산합니다.
-            df['brk1_drop'] = max1_today - df['Cum_Net_brk1']
-            df['brk2_drop'] = max2_today - df['Cum_Net_brk2']
-
-            # 3. 창구 1의 '오늘 하루 전체 중' 가장 깊은 최대 낙폭(찐바닥)을 찾습니다.
-            max_drop1_today = df['brk1_drop'].max()
-
-            # 4. 사용자님의 2가지 핵심 조건 적용!
-            # 조건 A: 창구1의 낙폭이 창구2의 낙폭보다 커야 한다.
-            cond_A = df['brk1_drop'] > df['brk2_drop']
-            
-            # 조건 B: 창구1의 낙폭이 오늘 중 가장 커야 한다. 
-            # (점이 찍힐 수 있게 오차 1% 여유 허용)
-            cond_B = df['brk1_drop'] >= (max_drop1_today * 0.99)
-
-            # 두 조건을 모두 만족하는 진정한 맥점 찾기
-            df['Is_Red_Zone'] = cond_A & cond_B & (max_drop1_today > 1000)
-
-            # 장 초반(9시~9시5분)과 동시호가 부근 제외
-            valid_time = (df.index.time >= pd.to_datetime('09:05').time()) & (df.index.time <= pd.to_datetime('15:20').time())
-            df['Is_Red_Zone'] = df['Is_Red_Zone'] & valid_time
-
-            # 5. 차트에 그릴 빨간색 데이터 분리
-            df['brk1_Red'] = df['Cum_Net_brk1'].where(df['Is_Red_Zone'], pd.NA)
             # ==============================================================================
             # 📊 차트 그리기 (6단)
             # ==============================================================================
@@ -338,13 +377,23 @@ if auth_token and len(stock_number) == 6:
                     "프로그램 수급", 
                     f"{selected_broker_name1} 수급", 
                     f"{selected_broker_name2} 수급",
-                    "프로그램 관여율 (막대:1분, 선:20/60 가중평균)" 
+                    "프로그램 관여율 (막대:1분, 선:20/60 가중평균)" # ⭐️ 제목 수정
                 ),
-                specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}]] 
+                specs=[
+                    [{"secondary_y": False}], 
+                    [{"secondary_y": False}], 
+                    [{"secondary_y": True}], 
+                    [{"secondary_y": True}], 
+                    [{"secondary_y": True}],
+                    [{"secondary_y": True}]
+                ] 
             )
 
             # 1층: 가격
-            fig.add_trace(go.Candlestick(x=df.index, open=df['open_pric'], high=df['high_pric'], low=df['low_pric'], close=df['cur_prc'], name="가격", increasing_line_color='#ff4d4d', increasing_fillcolor='#ff4d4d', decreasing_line_color='#0066ff', decreasing_fillcolor='#0066ff'), row=1, col=1)
+            fig.add_trace(go.Candlestick(
+                x=df.index, open=df['open_pric'], high=df['high_pric'], low=df['low_pric'], close=df['cur_prc'],
+                name="가격", increasing_line_color='#ff4d4d', increasing_fillcolor='#ff4d4d', decreasing_line_color='#0066ff', decreasing_fillcolor='#0066ff' 
+            ), row=1, col=1)
 
             # 2층: 일반 거래량
             vol_colors = ['#ff4d4d' if c >= o else '#0066ff' for c, o in zip(df['cur_prc'], df['open_pric'])]
@@ -358,37 +407,48 @@ if auth_token and len(stock_number) == 6:
             # 4층: 창구 1
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk1'], name=f"{selected_broker_name1} 매수", marker_color='#ff4d4d', opacity=0.7), row=4, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk1'], name=f"{selected_broker_name1} 매도", marker_color='#0066ff', opacity=0.7), row=4, col=1, secondary_y=False)
-            # 기본 검은선
-            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk1'], mode='lines', name=f"{selected_broker_name1} 누적", line=dict(color='black', width=1.5)), row=4, col=1, secondary_y=True)
-            # ⭐️ 유저 로직: 창구1 낙폭 최대 구간 빨간색 강조
-            fig.add_trace(go.Scatter(x=df.index, y=df['brk1_Red'], mode='lines+markers', name="창구1 최대낙폭", line=dict(color='red', width=4), marker=dict(size=6, color='red'), connectgaps=False), row=4, col=1, secondary_y=True)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk1'], mode='lines', name=f"{selected_broker_name1} 누적(우측)", line=dict(color='black', width=2.5)), row=4, col=1, secondary_y=True)
 
             # 5층: 창구 2
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk2'], name=f"{selected_broker_name2} 매수", marker_color='#ff4d4d', opacity=0.7), row=5, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.7), row=5, col=1, secondary_y=False)
-            # 기본 검은선
-            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적", line=dict(color='black', width=1.5)), row=5, col=1, secondary_y=True)
-            # ⭐️ 유저 로직: 창구1 조건 만족 시 창구2에도 동시간대 빨간색 표시 (흐름 비교용)
-            fig.add_trace(go.Scatter(x=df.index, y=df['brk2_Red'], mode='lines+markers', name="비교 맥점", line=dict(color='red', width=4), marker=dict(size=6, color='red'), connectgaps=False), row=5, col=1, secondary_y=True)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적(우측)", line=dict(color='black', width=2.5)), row=5, col=1, secondary_y=True)
 
-            # 6층: 프로그램 관여율
-            fig.add_trace(go.Bar(x=df.index, y=df['PG_Ratio_1m'], name="1분 관여율", marker_color='purple', opacity=0.3), row=6, col=1, secondary_y=False)
-            fig.add_trace(go.Scatter(x=df.index, y=df['PG_Ratio_20m_True'], mode='lines', name="20평균", line=dict(color='orange', width=2.5)), row=6, col=1, secondary_y=True)
-            fig.add_trace(go.Scatter(x=df.index, y=df['PG_Ratio_60m_True'], mode='lines', name="60평균", line=dict(color='green', width=2.5)), row=6, col=1, secondary_y=True)
+            # ==============================================================================
+            # ⭐️ 6층: 프로그램 관여율 (이중 축 + 60이평 추가)
+            # ==============================================================================
+            # 1분 관여율 (막대 그래프) -> 왼쪽 축
+            fig.add_trace(go.Bar(
+                x=df.index, y=df['PG_Ratio_1m'], 
+                name="1분 관여율(좌측, %)", marker_color='purple', opacity=0.3
+            ), row=6, col=1, secondary_y=False)
+            
+            # 20분 평균 관여율 (꺾은선 그래프) -> 오른쪽 축
+            fig.add_trace(go.Scatter(
+                x=df.index, y=df['PG_Ratio_20m_True'], 
+                mode='lines', name="20평균 관여율(우측, %)", line=dict(color='orange', width=2.5)
+            ), row=6, col=1, secondary_y=True)
+
+            # ⭐️ 60분 평균 관여율 (꺾은선 그래프) -> 오른쪽 축 추가
+            fig.add_trace(go.Scatter(
+                x=df.index, y=df['PG_Ratio_60m_True'], 
+                mode='lines', name="60평균 관여율(우측, %)", line=dict(color='green', width=2.5) # 초록색으로 설정
+            ), row=6, col=1, secondary_y=True)
 
             # 차트 레이아웃 업데이트
             fig.update_layout(height=1500, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
 
-            # ⭐️ 모든 Y축 단위 콤마 포맷으로 표시
+            # 모든 Y축(세로축)의 숫자를 생략 없이(k 사용 안 함) 콤마 포맷으로 표시
             fig.update_yaxes(tickformat=",")
             # 6층 우측 축 0 기준 고정
             fig.update_yaxes(rangemode="tozero", row=6, col=1, secondary_y=True)
 
             st.plotly_chart(fig, use_container_width=True)
+            # ==============================================================================
 
-            # 👇 자동 갱신 로직 (기존 유지) 👇
+            # 👇 (이 아래는 기존 코드 그대로 유지) 👇
             if auto_refresh:
                 st.toast("⏳ 1분 뒤에 최신 수급을 다시 스캔합니다...")
                 time.sleep(60)
