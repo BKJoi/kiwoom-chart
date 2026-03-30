@@ -296,43 +296,36 @@ if auth_token and len(stock_number) == 6:
             df['PG_Ratio_60m_True'] = (df['PG_60m_Sum'] / df['Vol_60m_Sum'].replace(0, pd.NA)).fillna(0) * 100 
 
             # ==============================================================================
-            # ⭐️ [핵심 로직] 사용자님 맞춤형 조건: 창구1의 '실시간' 최대 낙폭 맥점 포착
+            # ⭐️ [최종 완성] 사용자님의 '당일 절대 맥점(투매 클라이막스)' 포착 로직
             # ==============================================================================
-            # 1. 실시간 누적 최대값(Max) 계산 (아침부터 현재 1분까지의 최고점)
-            df['brk1_max'] = df['Cum_Net_brk1'].expanding().max()
-            df['brk2_max'] = df['Cum_Net_brk2'].expanding().max()
+            # 1. '오늘 하루 전체'를 기준으로 창구 1과 2의 가장 높았던 산 꼭대기(Max)를 고정합니다.
+            max1_today = df['Cum_Net_brk1'].max()
+            max2_today = df['Cum_Net_brk2'].max()
 
-            # 2. 현재 시점의 '낙폭' 계산 (최고점 - 현재 누적값)
-            df['brk1_drop'] = df['brk1_max'] - df['Cum_Net_brk1']
-            df['brk2_drop'] = df['brk2_max'] - df['Cum_Net_brk2']
+            # 2. 각 시간별로 산 꼭대기에서 얼마나 떨어졌는지 '낙폭'을 계산합니다.
+            df['brk1_drop'] = max1_today - df['Cum_Net_brk1']
+            df['brk2_drop'] = max2_today - df['Cum_Net_brk2']
 
-            # 3. ⭐️ 핵심 해결: '지금까지' 발생한 낙폭 중 가장 큰 값 (미래 참조 오류 해결!)
-            # 11시면 11시까지의 최대 낙폭, 14시면 14시까지의 최대 낙폭을 기록합니다.
-            df['brk1_max_drop_so_far'] = df['brk1_drop'].expanding().max()
+            # 3. 창구 1의 '오늘 하루 전체 중' 가장 깊은 최대 낙폭(찐바닥)을 찾습니다.
+            max_drop1_today = df['brk1_drop'].max()
 
-            # 4. 사용자님 조건 적용 (실시간 비교)
-            # 조건 1: 창구1 낙폭 > 창구2 낙폭
-            cond1 = df['brk1_drop'] > df['brk2_drop']
+            # 4. 사용자님의 2가지 핵심 조건 적용!
+            # 조건 A: 창구1의 낙폭이 창구2의 낙폭보다 커야 한다.
+            cond_A = df['brk1_drop'] > df['brk2_drop']
             
-            # 조건 2: 현재 낙폭이 "지금까지의 최대 낙폭"의 98% 이상일 것 (바닥 갱신 중일 때)
-            cond2 = df['brk1_drop'] >= (df['brk1_max_drop_so_far'] * 0.98) 
+            # 조건 B: 창구1의 낙폭이 오늘 중 가장 커야 한다. 
+            # (점이 찍힐 수 있게 오차 1% 여유 허용)
+            cond_B = df['brk1_drop'] >= (max_drop1_today * 0.99)
 
-            # 조건 3: 낙폭이 실제로 존재할 때(0 초과)
-            cond3 = df['brk1_max_drop_so_far'] > 0
+            # 두 조건을 모두 만족하는 진정한 맥점 찾기
+            df['Is_Red_Zone'] = cond_A & cond_B & (max_drop1_today > 1000)
 
-            # 세 조건이 모두 맞으면 빨간불 켜기!
-            df['Is_Red_Zone'] = cond1 & cond2 & cond3
-            
-            # 단, 장 초반(9시~9시5분)의 노이즈는 무시하고, 15시 20분까지만 적용
-            df.loc[(df.index.time < pd.to_datetime('09:05').time()) | (df.index.time > pd.to_datetime('15:20').time()), 'Is_Red_Zone'] = False
+            # 장 초반(9시~9시5분)과 동시호가 부근 제외
+            valid_time = (df.index.time >= pd.to_datetime('09:05').time()) & (df.index.time <= pd.to_datetime('15:20').time())
+            df['Is_Red_Zone'] = df['Is_Red_Zone'] & valid_time
 
-            # 5. 빨간색 덧칠을 위한 데이터 분리
+            # 5. 차트에 그릴 빨간색 데이터 분리
             df['brk1_Red'] = df['Cum_Net_brk1'].where(df['Is_Red_Zone'], pd.NA)
-            df['brk2_Red'] = df['Cum_Net_brk2'].where(df['Is_Red_Zone'], pd.NA)
-            # ==============================================================================
-            # ==============================================================================
-
-
             # ==============================================================================
             # 📊 차트 그리기 (6단)
             # ==============================================================================
