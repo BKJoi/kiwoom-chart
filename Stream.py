@@ -405,9 +405,9 @@ if auth_token and len(stock_number) == 6:
             df.loc[~mask_p, 'Signal_Value'] = (df['Max2'] - df['Cum_Net_brk2']) + (df['Cum_Net_brk1'] - df['Min1'])
 
             # --- 가변 임계치(T)를 이용한 Red/Blue 포인트 추출 루프 ---
-            last_rp_val = 0.0      # 최근 빨간 점의 지표값
-            lowest_after_rp = 0.0  # 빨간 점 이후의 최저 지표값
-            threshold_T = 0.0      # 임계치 (이전 파동의 하락 깊이)
+            last_rp_val = 0.0      
+            lowest_after_rp = 0.0  
+            threshold_T = 0.0      
 
             red_signals = [None] * len(df)
             blue_signals = [None] * len(df)
@@ -415,29 +415,28 @@ if auth_token and len(stock_number) == 6:
 
             for i in range(len(df)):
                 v = sv_list[i]
+                
+                # 1. 빨간 점 (지표 신고가)
                 if v > last_rp_val:
-                    # 새로운 고점(빨간 점) 갱신 시점에 T 업데이트
-                    # T = (직전 빨간 점 지표값) - (그 사이의 최저 지표값)
+                    # 새로운 고점 갱신 시 T 업데이트
                     if last_rp_val > 0 and lowest_after_rp < last_rp_val:
-                        threshold_T = last_rp_val - lowest_after_rp
+                        # 이전 하락폭을 임계치로 저장
+                        new_T = last_rp_val - lowest_after_rp
+                        if new_T > 0: threshold_T = new_T
                     
                     last_rp_val = v
-                    lowest_after_rp = v # 최저점 추적 초기화
+                    lowest_after_rp = v
                     red_signals[i] = v
                 
+                # 2. 파란 점 (임계치 돌파 하락)
                 elif v < last_rp_val:
-                    # 파란 점 판단: 임계치 T보다 더 크게 하락했는가?
-                    is_blue = False
+                    # ⭐️ 수정포인트: threshold_T가 0보다 클 때(즉, 최소 한 번의 파동이 끝난 후)만 파란 점 표시
                     if threshold_T > 0:
                         if v < (last_rp_val - threshold_T):
-                            is_blue = True
-                    else:
-                        is_blue = True # T가 없는 극초반에는 하락 시 무조건 표시
-                    
-                    if is_blue:
-                        blue_signals[i] = v
-                        if v < lowest_after_rp:
-                            lowest_after_rp = v
+                            blue_signals[i] = v
+                            if v < lowest_after_rp:
+                                lowest_after_rp = v
+                    # else: threshold_T가 0일 때는 파란 점을 아예 찍지 않습니다 (도배 방지)
 
             df['Sig_Red'] = red_signals
             df['Sig_Blue'] = blue_signals
