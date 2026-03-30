@@ -301,29 +301,29 @@ if auth_token and len(stock_number) == 6:
             df['PG_Ratio_20m_True'] = (df['PG_20m_Sum'] / df['Vol_20m_Sum'].replace(0, pd.NA)).fillna(0) * 100
             df['PG_Ratio_60m_True'] = (df['PG_60m_Sum'] / df['Vol_60m_Sum'].replace(0, pd.NA)).fillna(0) * 100 
 
+           # ==============================================================================
+            # ⭐️ [핵심 추가] 3번 논리: abs(1) + abs(2) 수급 응축(눈치보기) 최소값 찾기
             # ==============================================================================
-            # ⭐️ [핵심 추가] 사용자님 요청: 현재 시점 기준 abs(1+2) 수급 대칭 최소값 찾기
-            # ==============================================================================
-            # 1. 1번 창구와 2번 창구 수급의 합의 절대값 계산 (서로 거울처럼 대칭일 때 0에 가까워짐)
-            df['Broker_Balance'] = (df['Cum_Net_brk1'] + df['Cum_Net_brk2']).abs()
+            # 1. 1번 창구와 2번 창구 누적 수량 각각의 절대값을 더합니다.
+            # (이 값이 작다는 것은, 두 창구 모두 수량이 0에 가깝다는 뜻입니다)
+            df['Broker_Balance'] = df['Cum_Net_brk1'].abs() + df['Cum_Net_brk2'].abs()
             
             # 2. 장 초반의 불규칙한 데이터(09:00~09:05)는 제외하고 계산
             valid_df = df.between_time('09:05', '15:20')
             if not valid_df.empty:
-                # "현재 조회된 데이터" 기준의 최소값 찾기 
-                # (10시에 조회하면 10시까지의 최소값, 14시에 조회하면 14시까지의 최소값이 됩니다)
+                # "현재 조회된 데이터" 기준의 최소값(가장 0에 가깝게 붙은 순간) 찾기 
                 current_min = valid_df['Broker_Balance'].min()
                 
-                # 최소값과 일치하는 순간(혹은 시각적 가독성을 위해 +500주 정도의 미세 오차 허용)을 맥점으로 판정
-                # 500주는 보통 1분봉 안에서 거의 차이가 없는 수준이라 선명하게 찍히게 해줍니다.
-                df['Is_Mirror_Zone'] = df['Broker_Balance'] <= (current_min + 500)
+                # 최소값 근처(오차 500주 이내)일 때를 맥점으로 판정
+                # 500주는 노이즈를 걸러주고 선명하게 표시하기 위한 여유값입니다.
+                df['Is_Macjum_Zone'] = df['Broker_Balance'] <= (current_min + 500)
             else:
-                df['Is_Mirror_Zone'] = False
+                df['Is_Macjum_Zone'] = False
 
             # 3. 빨간색으로 그릴 데이터 분리 (조건에 맞지 않으면 그리지 않음)
-            df['brk1_Red'] = df['Cum_Net_brk1'].where(df['Is_Mirror_Zone'], pd.NA)
-            df['brk2_Red'] = df['Cum_Net_brk2'].where(df['Is_Mirror_Zone'], pd.NA)
-            # ==============================================================================
+            df['brk1_Red'] = df['Cum_Net_brk1'].where(df['Is_Macjum_Zone'], pd.NA)
+            df['brk2_Red'] = df['Cum_Net_brk2'].where(df['Is_Macjum_Zone'], pd.NA)
+            # =====================================================================================
 
             # 📊 차트 그리기 (6단)
             fig = make_subplots(
@@ -363,20 +363,16 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net'], mode='lines', name="PG 누적(우측)", line=dict(color='black', width=2.5)), row=3, col=1, secondary_y=True)
 
             # 4층: 창구 1
-            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk1'], name=f"{selected_broker_name1} 매수", marker_color='#ff4d4d', opacity=0.7), row=4, col=1, secondary_y=False)
-            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk1'], name=f"{selected_broker_name1} 매도", marker_color='#0066ff', opacity=0.7), row=4, col=1, secondary_y=False)
-            # 기본 검은선
+            # ... (막대 그래프 생략)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk1'], mode='lines', name=f"{selected_broker_name1} 누적", line=dict(color='black', width=1.5)), row=4, col=1, secondary_y=True)
-            # ⭐️ 수급 대칭 최소값 빨간색 강조 (점+선 복합모드)
-            fig.add_trace(go.Scatter(x=df.index, y=df['brk1_Red'], mode='lines+markers', name="대칭 맥점", line=dict(color='red', width=4), marker=dict(size=6, color='red')), row=4, col=1, secondary_y=True)
+            # ⭐️ 응축 맥점 빨간색 강조
+            fig.add_trace(go.Scatter(x=df.index, y=df['brk1_Red'], mode='lines+markers', name="응축 맥점", line=dict(color='red', width=4), marker=dict(size=6, color='red')), row=4, col=1, secondary_y=True)
 
             # 5층: 창구 2
-            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk2'], name=f"{selected_broker_name2} 매수", marker_color='#ff4d4d', opacity=0.7), row=5, col=1, secondary_y=False)
-            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.7), row=5, col=1, secondary_y=False)
-            # 기본 검은선
+            # ... (막대 그래프 생략)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적", line=dict(color='black', width=1.5)), row=5, col=1, secondary_y=True)
-            # ⭐️ 수급 대칭 최소값 빨간색 강조 (점+선 복합모드)
-            fig.add_trace(go.Scatter(x=df.index, y=df['brk2_Red'], mode='lines+markers', name="대칭 맥점", line=dict(color='red', width=4), marker=dict(size=6, color='red')), row=5, col=1, secondary_y=True)
+            # ⭐️ 응축 맥점 빨간색 강조
+            fig.add_trace(go.Scatter(x=df.index, y=df['brk2_Red'], mode='lines+markers', name="응축 맥점", line=dict(color='red', width=4), marker=dict(size=6, color='red')), row=5, col=1, secondary_y=True)
 
             # 6층: 프로그램 관여율
             fig.add_trace(go.Bar(x=df.index, y=df['PG_Ratio_1m'], name="1분 관여율", marker_color='purple', opacity=0.3), row=6, col=1, secondary_y=False)
