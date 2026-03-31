@@ -16,7 +16,7 @@ app_secret = st.secrets["APP_SECRET"]
 # ----------------------------------------------------
 # 1. 인증 및 데이터 수집 함수
 # ----------------------------------------------------
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def get_access_token():
     # 토큰 발급 경로는 /oauth2/token 입니다.
     url = f"{host_url}/oauth2/token"
