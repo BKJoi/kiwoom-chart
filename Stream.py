@@ -432,6 +432,23 @@ if auth_token and len(stock_number) == 6:
             # ==============================================================================
             # 📊 차트 그리기 (6단)
             # ==============================================================================
+
+
+# 현재 종가에서 이전 종가를 뺍니다. 첫 번째 데이터는 이전 값이 없으므로 0으로 채웁니다.
+        price_diff = df['cur_prc'].diff().fillna(0)
+
+# 사용자가 요구한 조건: 현재/이전 >= 1 (즉, diff >= 0)이면 빨강, 아니면 파랑
+        pg_ratio_colors = ['#ff4d4d' if diff >= 0 else '#0066ff' for diff in price_diff]
+
+# 1분 관여율 (막대 그래프) -> marker_color를 위에서 만든 pg_ratio_colors로 변경
+        fig.add_trace(go.Bar(
+            x=df.index, 
+            y=df['PG_Ratio_1m'], 
+            name="1분 관여율(좌측, %)", 
+            marker_color=pg_ratio_colors, 
+            opacity=0.4                   
+
+# ... (이후 20분/60분 평균선 코드는 동일) ...            
             fig = make_subplots(
                 rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
                 row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2], 
