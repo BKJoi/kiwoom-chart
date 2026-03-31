@@ -493,147 +493,39 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Scatter(x=df.index, y=df.apply(lambda r: r['Cum_Net_brk2'] if not pd.isna(r['Signal_Point']) else pd.NA, axis=1), 
                                      mode='markers', name="신호(창구2)", marker=dict(color='red', size=6)), row=5, col=1, secondary_y=True)
 
-# ==============================================================================
-            # ⭐️ [수정] 6층: 창구1 & 창구2 누적순매수 상관성 지표 계산 (20분 이동 상관계수)
             # ==============================================================================
-            # 두 창구가 얼마나 비슷하게 움직이는지(커플링)를 나타냅니다.
-            # 1에 가까우면 똑같이 사고 파는 것, -1에 가까우면 반대로 움직이는 것입니다.
-            df['Brk_Correlation'] = df['Cum_Net_brk1'].rolling(window=20).corr(df['Cum_Net_brk2'])
-
+            # ⭐️ 6층: 프로그램 관여율 (이중 축 + 60이평 추가)
             # ==============================================================================
-            # 📊 차트 그리기 (6단) - 수정본
-            # ==============================================================================
-            fig = make_subplots(
-                rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2], 
-                subplot_titles=(
-                    "가격 (한국식 컬러)", 
-                    "거래량", 
-                    "프로그램 수급", 
-                    f"{selected_broker_name1} 수급", 
-                    f"{selected_broker_name2} 수급",
-                    "창구1 & 창구2 누적순매수 상관도 (20분 이동)" # ⭐️ 6층 제목 변경
-                ),
-                specs=[
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}],
-                    [{"secondary_y": False}] # ⭐️ 6층은 상관계수만 보므로 단일 축으로 설정
-                ] 
-            )
-
-            # ... (1층 ~ 5층 코드는 기존과 동일하므로 생략) ...
-            # 1층: 가격
-            fig.add_trace(go.Candlestick(
-                x=df.index, open=df['open_pric'], high=df['high_pric'], low=df['low_pric'], close=df['cur_prc'],
-                name="가격", increasing_line_color='#ff4d4d', increasing_fillcolor='#ff4d4d', decreasing_line_color='#0066ff', decreasing_fillcolor='#0066ff' 
-            ), row=1, col=1)
-
-            # 2층: 거래량
-            vol_colors = ['#ff4d4d' if c >= o else '#0066ff' for c, o in zip(df['cur_prc'], df['open_pric'])]
-            fig.add_trace(go.Bar(x=df.index, y=df['trde_qty'], name="거래량", marker_color=vol_colors), row=2, col=1)
+            # 1분 관여율 (막대 그래프) -> 왼쪽 축
+            fig.add_trace(go.Bar(
+                x=df.index, y=df['PG_Ratio_1m'], 
+                name="1분 관여율(좌측, %)", marker_color='purple', opacity=0.3
+            ), row=6, col=1, secondary_y=False)
             
-            # 3층: PG
-            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m'], name="PG 매수", marker_color='#ff4d4d', opacity=0.7), row=3, col=1, secondary_y=False)
-            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m'], name="PG 매도", marker_color='#0066ff', opacity=0.7), row=3, col=1, secondary_y=False)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net'], mode='lines', name="PG 누적(우측)", line=dict(color='black', width=2.5)), row=3, col=1, secondary_y=True)
-
-            # 4층: 창구 1
-            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk1'], name=f"{selected_broker_name1} 매수", marker_color='#ff4d4d', opacity=0.4), row=4, col=1, secondary_y=False)
-            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk1'], name=f"{selected_broker_name1} 매도", marker_color='#0066ff', opacity=0.4), row=4, col=1, secondary_y=False)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk1'], mode='lines', name=f"{selected_broker_name1} 누적", line=dict(color='black', width=2)), row=4, col=1, secondary_y=True)
-            fig.add_trace(go.Scatter(x=df.index, y=df.apply(lambda r: r['Cum_Net_brk1'] if not pd.isna(r['Signal_Point']) else pd.NA, axis=1), 
-                                     mode='markers', name="신호(창구1)", marker=dict(color='red', size=6)), row=4, col=1, secondary_y=True)
-
-            # 5층: 창구 2
-            fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk2'], name=f"{selected_broker_name2} 매수", marker_color='#ff4d4d', opacity=0.4), row=5, col=1, secondary_y=False)
-            fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.4), row=5, col=1, secondary_y=False)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적", line=dict(color='black', width=2)), row=5, col=1, secondary_y=True)
-            fig.add_trace(go.Scatter(x=df.index, y=df.apply(lambda r: r['Cum_Net_brk2'] if not pd.isna(r['Signal_Point']) else pd.NA, axis=1), 
-                                     mode='markers', name="신호(창구2)", marker=dict(color='red', size=6)), row=5, col=1, secondary_y=True)
-
-# ==============================================================================
-            # ⭐️ [수정] 6층: 창구1 & 창구2 '전체 누적' 상관성 지표 (Expanding Correlation)
-            # ==============================================================================
-            # .rolling(20) 대신 .expanding()을 사용하여 장 시작부터 현재까지의 전체 상관성을 계산합니다.
-            df['Brk_Total_Corr'] = df['Cum_Net_brk1'].expanding(min_periods=10).corr(df['Cum_Net_brk2'])
-
-            # ==============================================================================
-            # 📊 차트 그리기 (6단) - 전체 상관성 버전
-            # ==============================================================================
-            fig = make_subplots(
-                rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2], 
-                subplot_titles=(
-                    "가격 (한국식 컬러)", 
-                    "거래량", 
-                    "프로그램 수급", 
-                    f"{selected_broker_name1} 수급", 
-                    f"{selected_broker_name2} 수급",
-                    "창구1 & 창구2 당일 전체 누적 상관도 (커플링 지수)" # ⭐️ 제목 변경
-                ),
-                specs=[
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}],
-                    [{"secondary_y": False}]
-                ] 
-            )
-
-            # ... (1층 ~ 5층 코드는 기존과 동일) ...
-# ==============================================================================
-            # ⭐️ [수정] 6층: 창구1 vs 창구2 누적 순매수 차이 (Net Gap)
-            # ==============================================================================
-            # 창구1이 더 많이 사면 양수(+), 창구2가 더 많이 사면 음수(-)로 표시됩니다.
-            df['Brk_Net_Gap'] = df['Cum_Net_brk1'] - df['Cum_Net_brk2']
-
-            # ==============================================================================
-            # 📊 차트 그리기 (6단) - 순매수 차이 버전
-            # ==============================================================================
-            fig = make_subplots(
-                rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2], 
-                subplot_titles=(
-                    "가격 (한국식 컬러)", 
-                    "거래량", 
-                    "프로그램 수급", 
-                    f"{selected_broker_name1} 수급", 
-                    f"{selected_broker_name2} 수급",
-                    f"수급 격차 ({selected_broker_name1} - {selected_broker_name2})" # ⭐️ 제목 변경
-                ),
-                specs=[
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}],
-                    [{"secondary_y": False}] # 격차 지표이므로 단일 축
-                ] 
-            )
-
-            # ... (1층 ~ 5층 코드는 기존과 동일) ...
-
-            # ==============================================================================
-            # ⭐️ [수정] 6층: 창구간 순매수 차이 시각화 (영역형 차트)
-            # ==============================================================================
-            # 0을 기준으로 위아래 색상을 다르게 하면 더 보기 좋습니다.
+            # 20분 평균 관여율 (꺾은선 그래프) -> 오른쪽 축
             fig.add_trace(go.Scatter(
-                x=df.index, y=df['Brk_Net_Gap'], 
-                mode='lines', name="순매수 차이", 
-                line=dict(color='gray', width=1.5),
-                fill='tozeroy', # 0선까지 색상 채우기
-                fillcolor='rgba(128, 128, 128, 0.2)' # 연한 회색 채우기
-            ), row=6, col=1)
+                x=df.index, y=df['PG_Ratio_20m_True'], 
+                mode='lines', name="20평균 관여율(우측, %)", line=dict(color='orange', width=2.5)
+            ), row=6, col=1, secondary_y=True)
 
-            # 강조를 위해 0선(기준선) 추가
-            fig.add_hline(y=0, line_dash="solid", line_color="black", line_width=1, row=6, col=1)
+            # ⭐️ 60분 평균 관여율 (꺾은선 그래프) -> 오른쪽 축 추가
+            fig.add_trace(go.Scatter(
+                x=df.index, y=df['PG_Ratio_60m_True'], 
+                mode='lines', name="60평균 관여율(우측, %)", line=dict(color='green', width=2.5) # 초록색으로 설정
+            ), row=6, col=1, secondary_y=True)
 
-            # 차트 레이아웃 및 Y축 설정
-            fig.update_layout(height=1500, template='plotly_white', hovermode='x unified', showlegend=False)
-            fig.update_yaxes(tickformat=",", row=6, col=1) # 숫자 콤마 표시
+            # 차트 레이아웃 업데이트
+            fig.update_layout(height=1500, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
+            fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
+            fig.update_layout(xaxis_rangeslider_visible=False)
+
+            # 모든 Y축(세로축)의 숫자를 생략 없이(k 사용 안 함) 콤마 포맷으로 표시
+            fig.update_yaxes(tickformat=",")
+            # 6층 우측 축 0 기준 고정
+            fig.update_yaxes(rangemode="tozero", row=6, col=1, secondary_y=True)
 
             st.plotly_chart(fig, use_container_width=True)
+
+
+        else:
+            st.warning("데이터가 없거나 장 시작 전입니다.")
