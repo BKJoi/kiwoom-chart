@@ -228,45 +228,62 @@ if st.sidebar.button("🧹 오전 데이터 누락 시 클릭 (캐시 삭제)"):
         del st.session_state['last_search_key']
     st.rerun()
 
+NameError: name 'pg_raw' is not defined 오류가 발생한 이유는, 제가 제안드린 병렬 수집 코드에서 데이터를 캐시(st.session_state)에 저장만 하고, 이후 코드에서 사용하는 pg_raw, brk_raw1 등의 변수를 따로 선언해 주지 않았기 때문입니다.
+
+파이썬은 위에서 아래로 한 줄씩 실행되기 때문에, 아래쪽 if pg_raw: 문을 만나기 전에 이 변수들이 반드시 정의되어 있어야 합니다.
+
+🛠️ 오류 해결 및 1번(병렬 수집) 완성 코드
+이 코드는 데이터 수집을 동시에 진행하여 속도를 높이면서도, 이후 로직에서 필요한 변수들을 완벽하게 정의해 줍니다.
+
+Python
+import concurrent.futures  # 파일 최상단에 추가되어 있는지 확인하세요
+
+# ... (중략: 데이터 수집 시작 부분) ...
+
 if auth_token and len(stock_number) == 6:
     with st.spinner(f"[{stock_number}] 데이터를 병렬로 초고속 수집 중..."):
         
         current_search_key = f"{stock_number}_{target_date_str}_{target_broker_code1}_{target_broker_code2}"
         
-        # 1. 페이지 결정 (첫 로딩이면 많이, 갱신이면 적게)
+        # 1. 페이지 결정 (처음엔 많이, 갱신 시엔 조금)
         is_first_load = 'last_search_key' not in st.session_state or st.session_state['last_search_key'] != current_search_key
         
         if is_first_load:
-            fetch_p = 500  # 처음엔 과거 데이터 위주로 많이
+            fetch_p = 500  
             st.session_state['last_search_key'] = current_search_key
             st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
         else:
-            fetch_p = 2    # 1분 자동 갱신 시에는 최신 2페이지만 가져옴 (속도 최적화)
+            fetch_p = 3    # 자동 갱신 시 효율화
 
-        # 🚀 2. 병렬 수집 엔진 (ThreadPoolExecutor)
-        # 세 가지 API 요청을 동시에 보냅니다.
+        # 🚀 2. 병렬 수집 엔진 실행 (동시에 던지기)
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            # 작업 예약
-            future_pg = executor.submit(get_historical_program_data, auth_token, stock_number, target_date_str, fetch_p)
-            future_brk1 = executor.submit(get_historical_broker_data, auth_token, stock_number, target_broker_code1, fetch_p)
+            # API 요청들을 예약
+            f_pg = executor.submit(get_historical_program_data, auth_token, stock_number, target_date_str, fetch_p)
+            f_b1 = executor.submit(get_historical_broker_data, auth_token, stock_number, target_broker_code1, fetch_p)
             
+            # 창구2 처리
             if target_broker_code1 == target_broker_code2:
-                future_brk2 = future_brk1 # 같은 창구면 한 번만
+                f_b2 = f_b1 
             else:
-                future_brk2 = executor.submit(get_historical_broker_data, auth_token, stock_number, target_broker_code2, fetch_p)
+                f_b2 = executor.submit(get_historical_broker_data, auth_token, stock_number, target_broker_code2, fetch_p)
 
-            # 결과 수합 (동시에 완료됨)
-            new_pg = future_pg.result()
-            new_brk1 = future_brk1.result()
-            new_brk2 = future_brk2.result() if target_broker_code1 != target_broker_code2 else new_brk1
+            # 결과 수합
+            new_pg = f_pg.result()
+            new_brk1 = f_b1.result()
+            new_brk2 = f_b2.result() if target_broker_code1 != target_broker_code2 else new_brk1
 
-        # 3. 차트 데이터는 별도 수집 (가장 가벼움)
+        # 3. 차트 데이터 수집
         chart_raw = get_historical_minute_chart(auth_token, stock_number)
 
-        # 4. 데이터 병합 (중복 방지 적용)
-        st.session_state['data_cache']['pg'] = merge_api_data(st.session_state['data_cache']['pg'], new_pg)
-        st.session_state['data_cache']['brk1'] = merge_api_data(st.session_state['data_cache']['brk1'], new_brk1)
-        st.session_state['data_cache']['brk2'] = merge_api_data(st.session_state['data_cache']['brk2'], new_brk2)
+        # 🚀 4. 데이터 병합 및 변수 정의 (이 부분이 추가되어야 에러가 안 납니다)
+        pg_raw = merge_api_data(st.session_state['data_cache']['pg'], new_pg)
+        brk_raw1 = merge_api_data(st.session_state['data_cache']['brk1'], new_brk1)
+        brk_raw2 = merge_api_data(st.session_state['data_cache']['brk2'], new_brk2)
+
+        # 업데이트된 데이터를 다시 캐시에 저장
+        st.session_state['data_cache']['pg'] = pg_raw
+        st.session_state['data_cache']['brk1'] = brk_raw1
+        st.session_state['data_cache']['brk2'] = brk_raw2
 
         if chart_raw:
             df = pd.DataFrame(chart_raw)
