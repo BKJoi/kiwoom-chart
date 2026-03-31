@@ -228,12 +228,6 @@ if st.sidebar.button("🧹 오전 데이터 누락 시 클릭 (캐시 삭제)"):
         del st.session_state['last_search_key']
     st.rerun()
 
-NameError: name 'pg_raw' is not defined 오류가 발생한 이유는, 제가 제안드린 병렬 수집 코드에서 데이터를 캐시(st.session_state)에 저장만 하고, 이후 코드에서 사용하는 pg_raw, brk_raw1 등의 변수를 따로 선언해 주지 않았기 때문입니다.
-
-파이썬은 위에서 아래로 한 줄씩 실행되기 때문에, 아래쪽 if pg_raw: 문을 만나기 전에 이 변수들이 반드시 정의되어 있어야 합니다.
-
-🛠️ 오류 해결 및 1번(병렬 수집) 완성 코드
-이 코드는 데이터 수집을 동시에 진행하여 속도를 높이면서도, 이후 로직에서 필요한 변수들을 완벽하게 정의해 줍니다.
 
 Python
 import concurrent.futures  # 파일 최상단에 추가되어 있는지 확인하세요
