@@ -33,7 +33,7 @@ def get_access_token():
         "secretkey": app_secret
     }
     
-    response = requests.post(url, headers=headers, json=data)
+    response = requests.post(url, headers=headers, json=data, timeout=5)
     
     # 404가 계속 뜬다면, 혹시 host_url 끝에 /가 붙어있지는 않은지 확인해보세요.
     if response.status_code != 200:
@@ -48,7 +48,7 @@ def get_access_token():
 def get_broker_list(token):
     url = f"{host_url}/api/dostk/stkinfo"
     headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "ka10102", "authorization": f"Bearer {token}"}
-    res = requests.post(url, headers=headers, json={})
+    res = requests.post(url, headers=headers, json={}, timeout=5)
     data = res.json()
     broker_dict = {}
     if "list" in data:
@@ -67,7 +67,7 @@ def get_historical_minute_chart(token, stock_code):
         headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "ka10080", "authorization": f"Bearer {token}"}
         if next_key: headers.update({"cont-yn": "Y", "tr-cont": "Y", "next-key": next_key, "tr-cont-key": next_key})
         data = {"stk_cd": stock_code, "tic_scope": "1", "upd_stkpc_tp": "1"}
-        response = requests.post(url, headers=headers, json=data)
+        response = requests.post(url, headers=headers, json=data, timeout=5)
         res_json = response.json()
         chunk = res_json.get('stk_min_pole_chart_qry', [])
         if not chunk: break
@@ -93,7 +93,7 @@ def get_historical_program_data(token, stock_code, target_date, max_pages=1500):
         if next_key: headers.update({"cont-yn": "Y", "tr-cont": "Y", "next-key": next_key, "tr-cont-key": next_key})
         
         req_data = {"amt_qty_tp": "2", "stk_cd": stock_code, "date": target_date}
-        response = requests.post(url, headers=headers, json=req_data)
+        response = requests.post(url, headers=headers, json=req_data, timeout=5)
         
         if response.status_code != 200:
             time.sleep(2) # ⭐️ 차단 회피를 위해 조금 더 쉽니다
@@ -132,7 +132,7 @@ def get_historical_broker_data(token, stock_code, brk_code, max_pages=1500): # �
         if next_key: headers.update({"cont-yn": "Y", "tr-cont": "Y", "next-key": next_key, "tr-cont-key": next_key})
         
         req_data = {"mmcm_cd": brk_code, "stk_cd": stock_code, "mrkt_tp": "0", "qty_tp": "0", "pric_tp": "0", "stex_tp": "1"}
-        response = requests.post(url, headers=headers, json=req_data)
+        response = requests.post(url, headers=headers, json=req_data, timeout=5)
         
         if response.status_code != 200:
             time.sleep(2)
