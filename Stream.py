@@ -228,8 +228,6 @@ if st.sidebar.button("🧹 오전 데이터 누락 시 클릭 (캐시 삭제)"):
         del st.session_state['last_search_key']
     st.rerun()
 
-
-Python
 import concurrent.futures  # 파일 최상단에 추가되어 있는지 확인하세요
 
 # ... (중략: 데이터 수집 시작 부분) ...
