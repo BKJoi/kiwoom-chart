@@ -5,7 +5,6 @@ import time
 from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import concurrent.futures  # 병렬 처리를 위해 추가
 
 # 1. URL은 숨길 필요가 없으므로 직접 입력 (모의투자 또는 실투자 URL)
 host_url = "https://mockapi.kiwoom.com" # 또는 모의투자 URL
@@ -247,20 +246,23 @@ if auth_token and len(stock_number) == 6:
         else:
             fetch_p = 3    
 
-        # 🚀 2. 병렬 수집 엔진 실행
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            f_pg = executor.submit(get_historical_program_data, auth_token, stock_number, target_date_str, fetch_p)
-            f_b1 = executor.submit(get_historical_broker_data, auth_token, stock_number, target_broker_code1, fetch_p)
-            
-            if target_broker_code1 == target_broker_code2:
-                f_b2 = f_b1 
-            else:
-                f_b2 = executor.submit(get_historical_broker_data, auth_token, stock_number, target_broker_code2, fetch_p)
+# 🚀 2. 안전한 순차 수집 엔진 실행 (키움 API 1700 에러 차단 방지)
+        
+        # (1) 프로그램 수급 데이터 수집
+        new_pg = get_historical_program_data(auth_token, stock_number, target_date_str, fetch_p)
+        time.sleep(0.3) # ⭐️ 서버가 놀라지 않게 0.3초 쉬어줍니다.
 
-            # 결과 가져오기
-            new_pg = f_pg.result()
-            new_brk1 = f_b1.result()
-            new_brk2 = f_b2.result() if target_broker_code1 != target_broker_code2 else new_brk1
+        # (2) 첫 번째 창구 데이터 수집
+        new_brk1 = get_historical_broker_data(auth_token, stock_number, target_broker_code1, fetch_p)
+        time.sleep(0.3) # ⭐️ 다시 0.3초 휴식
+
+        # (3) 두 번째 창구 데이터 수집 (첫 번째 창구와 설정이 다를 때만 요청)
+        if target_broker_code1 == target_broker_code2:
+            new_brk2 = new_brk1 # 같으면 굳이 서버에 또 물어보지 않고 그대로 복사해서 씁니다.
+        else:
+            new_brk2 = get_historical_broker_data(auth_token, stock_number, target_broker_code2, fetch_p)
+            time.sleep(0.3)
+            
 
         # 3. 차트 데이터 수집
         chart_raw = get_historical_minute_chart(auth_token, stock_number)
