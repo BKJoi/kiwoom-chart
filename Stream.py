@@ -554,27 +554,58 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Scatter(x=df.index, y=df.apply(lambda r: r['Cum_Net_brk2'] if not pd.isna(r['Signal_Point']) else pd.NA, axis=1), 
                                      mode='markers', name="신호(창구2)", marker=dict(color='red', size=6)), row=5, col=1, secondary_y=True)
 
+# ==============================================================================
+            # ⭐️ [수정] 6층: 창구1 & 창구2 '전체 누적' 상관성 지표 (Expanding Correlation)
             # ==============================================================================
-            # ⭐️ [수정] 6층: 창구 상관성 시각화 (선 그래프)
+            # .rolling(20) 대신 .expanding()을 사용하여 장 시작부터 현재까지의 전체 상관성을 계산합니다.
+            df['Brk_Total_Corr'] = df['Cum_Net_brk1'].expanding(min_periods=10).corr(df['Cum_Net_brk2'])
+
             # ==============================================================================
-            # 상관계수 선
+            # 📊 차트 그리기 (6단) - 전체 상관성 버전
+            # ==============================================================================
+            fig = make_subplots(
+                rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2], 
+                subplot_titles=(
+                    "가격 (한국식 컬러)", 
+                    "거래량", 
+                    "프로그램 수급", 
+                    f"{selected_broker_name1} 수급", 
+                    f"{selected_broker_name2} 수급",
+                    "창구1 & 창구2 당일 전체 누적 상관도 (커플링 지수)" # ⭐️ 제목 변경
+                ),
+                specs=[
+                    [{"secondary_y": False}], 
+                    [{"secondary_y": False}], 
+                    [{"secondary_y": True}], 
+                    [{"secondary_y": True}], 
+                    [{"secondary_y": True}],
+                    [{"secondary_y": False}]
+                ] 
+            )
+
+            # ... (1층 ~ 5층 코드는 기존과 동일) ...
+
+            # ==============================================================================
+            # ⭐️ [수정] 6층: 당일 전체 누적 상관성 시각화
+            # ==============================================================================
+            # 전체 누적 상관계수 선
             fig.add_trace(go.Scatter(
-                x=df.index, y=df['Brk_Correlation'], 
-                mode='lines', name="상관도(20분)", 
-                line=dict(color='darkmagenta', width=2),
-                fill='tozeroy' # 0을 기준으로 색을 채워 변화를 보기 쉽게 함
+                x=df.index, y=df['Brk_Total_Corr'], 
+                mode='lines', name="당일 전체 상관도", 
+                line=dict(color='teal', width=3), # 색상을 teal로 변경하여 가독성 높임
+                fill='tozeroy' 
             ), row=6, col=1)
 
-            # 0 기준선 (중립)
+            # 0 기준선 (중립 라인)
             fig.add_hline(y=0, line_dash="dash", line_color="gray", row=6, col=1)
+            
+            # 상단(1.0), 하단(-1.0) 가이드라인 추가 (참고용)
+            fig.add_hline(y=0.8, line_dash="dot", line_color="red", opacity=0.3, row=6, col=1)
+            fig.add_hline(y=-0.8, line_dash="dot", line_color="blue", opacity=0.3, row=6, col=1)
 
-            # 차트 레이아웃 업데이트
-            fig.update_layout(height=1500, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False)
-            fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
-            fig.update_layout(xaxis_rangeslider_visible=False)
-
-            fig.update_yaxes(tickformat=",")
-            # 6층 Y축 범위 고정 (-1 ~ 1)
-            fig.update_yaxes(range=[-1.1, 1.1], row=6, col=1)
+            # 차트 레이아웃 및 Y축 설정
+            fig.update_layout(height=1500, template='plotly_white', hovermode='x unified', showlegend=False)
+            fig.update_yaxes(range=[-1.1, 1.1], row=6, col=1) # 상관계수 범위 고정
 
             st.plotly_chart(fig, use_container_width=True)
