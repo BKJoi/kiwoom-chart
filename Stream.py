@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import concurrent.futures  # 병렬 처리를 위해 추가
 
 # 1. URL은 숨길 필요가 없으므로 직접 입력 (모의투자 또는 실투자 URL)
 host_url = "https://mockapi.kiwoom.com" # 또는 모의투자 URL
@@ -227,33 +228,45 @@ if st.sidebar.button("🧹 오전 데이터 누락 시 클릭 (캐시 삭제)"):
         del st.session_state['last_search_key']
     st.rerun()
 
-if auth_token and len(stock_number) == 6: 
-    with st.spinner(f"[{stock_number}] 수급 데이터를 수집 중입니다... (약 10~20초 소요)"):
+if auth_token and len(stock_number) == 6:
+    with st.spinner(f"[{stock_number}] 데이터를 병렬로 초고속 수집 중..."):
         
         current_search_key = f"{stock_number}_{target_date_str}_{target_broker_code1}_{target_broker_code2}"
-        if 'last_search_key' not in st.session_state or st.session_state['last_search_key'] != current_search_key:
-            fetch_pages = 500 
+        
+        # 1. 페이지 결정 (첫 로딩이면 많이, 갱신이면 적게)
+        is_first_load = 'last_search_key' not in st.session_state or st.session_state['last_search_key'] != current_search_key
+        
+        if is_first_load:
+            fetch_p = 500  # 처음엔 과거 데이터 위주로 많이
             st.session_state['last_search_key'] = current_search_key
             st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
         else:
-            fetch_pages = 3 
+            fetch_p = 2    # 1분 자동 갱신 시에는 최신 2페이지만 가져옴 (속도 최적화)
+
+        # 🚀 2. 병렬 수집 엔진 (ThreadPoolExecutor)
+        # 세 가지 API 요청을 동시에 보냅니다.
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # 작업 예약
+            future_pg = executor.submit(get_historical_program_data, auth_token, stock_number, target_date_str, fetch_p)
+            future_brk1 = executor.submit(get_historical_broker_data, auth_token, stock_number, target_broker_code1, fetch_p)
             
-        chart_raw = get_historical_minute_chart(auth_token, stock_number) 
-        new_pg = get_historical_program_data(auth_token, stock_number, target_date_str, max_pages=fetch_pages)
-        
-        new_brk1 = get_historical_broker_data(auth_token, stock_number, target_broker_code1, max_pages=fetch_pages)
-        if target_broker_code1 == target_broker_code2:
-            new_brk2 = new_brk1 
-        else:
-            new_brk2 = get_historical_broker_data(auth_token, stock_number, target_broker_code2, max_pages=fetch_pages)
-            
-        pg_raw = merge_api_data(st.session_state['data_cache']['pg'], new_pg)
-        brk_raw1 = merge_api_data(st.session_state['data_cache']['brk1'], new_brk1)
-        brk_raw2 = merge_api_data(st.session_state['data_cache']['brk2'], new_brk2)
-        
-        st.session_state['data_cache']['pg'] = pg_raw
-        st.session_state['data_cache']['brk1'] = brk_raw1
-        st.session_state['data_cache']['brk2'] = brk_raw2
+            if target_broker_code1 == target_broker_code2:
+                future_brk2 = future_brk1 # 같은 창구면 한 번만
+            else:
+                future_brk2 = executor.submit(get_historical_broker_data, auth_token, stock_number, target_broker_code2, fetch_p)
+
+            # 결과 수합 (동시에 완료됨)
+            new_pg = future_pg.result()
+            new_brk1 = future_brk1.result()
+            new_brk2 = future_brk2.result() if target_broker_code1 != target_broker_code2 else new_brk1
+
+        # 3. 차트 데이터는 별도 수집 (가장 가벼움)
+        chart_raw = get_historical_minute_chart(auth_token, stock_number)
+
+        # 4. 데이터 병합 (중복 방지 적용)
+        st.session_state['data_cache']['pg'] = merge_api_data(st.session_state['data_cache']['pg'], new_pg)
+        st.session_state['data_cache']['brk1'] = merge_api_data(st.session_state['data_cache']['brk1'], new_brk1)
+        st.session_state['data_cache']['brk2'] = merge_api_data(st.session_state['data_cache']['brk2'], new_brk2)
 
         if chart_raw:
             df = pd.DataFrame(chart_raw)
