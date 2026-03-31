@@ -585,27 +585,55 @@ if auth_token and len(stock_number) == 6:
             )
 
             # ... (1층 ~ 5층 코드는 기존과 동일) ...
+# ==============================================================================
+            # ⭐️ [수정] 6층: 창구1 vs 창구2 누적 순매수 차이 (Net Gap)
+            # ==============================================================================
+            # 창구1이 더 많이 사면 양수(+), 창구2가 더 많이 사면 음수(-)로 표시됩니다.
+            df['Brk_Net_Gap'] = df['Cum_Net_brk1'] - df['Cum_Net_brk2']
 
             # ==============================================================================
-            # ⭐️ [수정] 6층: 당일 전체 누적 상관성 시각화
+            # 📊 차트 그리기 (6단) - 순매수 차이 버전
             # ==============================================================================
-            # 전체 누적 상관계수 선
+            fig = make_subplots(
+                rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2], 
+                subplot_titles=(
+                    "가격 (한국식 컬러)", 
+                    "거래량", 
+                    "프로그램 수급", 
+                    f"{selected_broker_name1} 수급", 
+                    f"{selected_broker_name2} 수급",
+                    f"수급 격차 ({selected_broker_name1} - {selected_broker_name2})" # ⭐️ 제목 변경
+                ),
+                specs=[
+                    [{"secondary_y": False}], 
+                    [{"secondary_y": False}], 
+                    [{"secondary_y": True}], 
+                    [{"secondary_y": True}], 
+                    [{"secondary_y": True}],
+                    [{"secondary_y": False}] # 격차 지표이므로 단일 축
+                ] 
+            )
+
+            # ... (1층 ~ 5층 코드는 기존과 동일) ...
+
+            # ==============================================================================
+            # ⭐️ [수정] 6층: 창구간 순매수 차이 시각화 (영역형 차트)
+            # ==============================================================================
+            # 0을 기준으로 위아래 색상을 다르게 하면 더 보기 좋습니다.
             fig.add_trace(go.Scatter(
-                x=df.index, y=df['Brk_Total_Corr'], 
-                mode='lines', name="당일 전체 상관도", 
-                line=dict(color='teal', width=3), # 색상을 teal로 변경하여 가독성 높임
-                fill='tozeroy' 
+                x=df.index, y=df['Brk_Net_Gap'], 
+                mode='lines', name="순매수 차이", 
+                line=dict(color='gray', width=1.5),
+                fill='tozeroy', # 0선까지 색상 채우기
+                fillcolor='rgba(128, 128, 128, 0.2)' # 연한 회색 채우기
             ), row=6, col=1)
 
-            # 0 기준선 (중립 라인)
-            fig.add_hline(y=0, line_dash="dash", line_color="gray", row=6, col=1)
-            
-            # 상단(1.0), 하단(-1.0) 가이드라인 추가 (참고용)
-            fig.add_hline(y=0.8, line_dash="dot", line_color="red", opacity=0.3, row=6, col=1)
-            fig.add_hline(y=-0.8, line_dash="dot", line_color="blue", opacity=0.3, row=6, col=1)
+            # 강조를 위해 0선(기준선) 추가
+            fig.add_hline(y=0, line_dash="solid", line_color="black", line_width=1, row=6, col=1)
 
             # 차트 레이아웃 및 Y축 설정
             fig.update_layout(height=1500, template='plotly_white', hovermode='x unified', showlegend=False)
-            fig.update_yaxes(range=[-1.1, 1.1], row=6, col=1) # 상관계수 범위 고정
+            fig.update_yaxes(tickformat=",", row=6, col=1) # 숫자 콤마 표시
 
             st.plotly_chart(fig, use_container_width=True)
