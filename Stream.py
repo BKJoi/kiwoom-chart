@@ -441,12 +441,7 @@ if auth_token and len(stock_number) == 6:
         pg_ratio_colors = ['#ff4d4d' if diff >= 0 else '#0066ff' for diff in price_diff]
 
 # 1분 관여율 (막대 그래프) -> marker_color를 위에서 만든 pg_ratio_colors로 변경
-        fig.add_trace(go.Bar(
-            x=df.index, 
-            y=df['PG_Ratio_1m'], 
-            name="1분 관여율(좌측, %)", 
-            marker_color=pg_ratio_colors, 
-            opacity=0.4                   
+        fig.add_trace(go.Bar(x=df.index,y=df['PG_Ratio_1m'],name="1분 관여율(좌측, %)",marker_color=pg_ratio_colors,opacity=0.4), row=6, col=1, secondary_y=False)                   
 
 # ... (이후 20분/60분 평균선 코드는 동일) ...            
             fig = make_subplots(
