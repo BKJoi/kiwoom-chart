@@ -245,7 +245,7 @@ if auth_token and len(stock_number) == 6:
         
         current_search_key = f"{stock_number}_{target_date_str}_{target_broker_code1}_{target_broker_code2}"
         
-        # 1. 페이지 결정 (처음엔 많이, 갱신 시엔 조금)
+        # 1. 페이지 결정 (첫 로딩이면 500, 자동 갱신이면 3)
         is_first_load = 'last_search_key' not in st.session_state or st.session_state['last_search_key'] != current_search_key
         
         if is_first_load:
@@ -253,21 +253,19 @@ if auth_token and len(stock_number) == 6:
             st.session_state['last_search_key'] = current_search_key
             st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
         else:
-            fetch_p = 3    # 자동 갱신 시 효율화
+            fetch_p = 3    
 
-        # 🚀 2. 병렬 수집 엔진 실행 (동시에 던지기)
+        # 🚀 2. 병렬 수집 엔진 실행
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            # API 요청들을 예약
             f_pg = executor.submit(get_historical_program_data, auth_token, stock_number, target_date_str, fetch_p)
             f_b1 = executor.submit(get_historical_broker_data, auth_token, stock_number, target_broker_code1, fetch_p)
             
-            # 창구2 처리
             if target_broker_code1 == target_broker_code2:
                 f_b2 = f_b1 
             else:
                 f_b2 = executor.submit(get_historical_broker_data, auth_token, stock_number, target_broker_code2, fetch_p)
 
-            # 결과 수합
+            # 결과 가져오기
             new_pg = f_pg.result()
             new_brk1 = f_b1.result()
             new_brk2 = f_b2.result() if target_broker_code1 != target_broker_code2 else new_brk1
@@ -275,12 +273,12 @@ if auth_token and len(stock_number) == 6:
         # 3. 차트 데이터 수집
         chart_raw = get_historical_minute_chart(auth_token, stock_number)
 
-        # 🚀 4. 데이터 병합 및 변수 정의 (이 부분이 추가되어야 에러가 안 납니다)
+        # 🚀 4. 변수 정의 및 캐시 업데이트 (에러 방지 핵심 구간)
+        # 이 변수들이 아래쪽 if pg_raw: 등에서 사용됩니다.
         pg_raw = merge_api_data(st.session_state['data_cache']['pg'], new_pg)
         brk_raw1 = merge_api_data(st.session_state['data_cache']['brk1'], new_brk1)
         brk_raw2 = merge_api_data(st.session_state['data_cache']['brk2'], new_brk2)
 
-        # 업데이트된 데이터를 다시 캐시에 저장
         st.session_state['data_cache']['pg'] = pg_raw
         st.session_state['data_cache']['brk1'] = brk_raw1
         st.session_state['data_cache']['brk2'] = brk_raw2
