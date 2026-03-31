@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from streamlit_autorefresh import st_autorefresh
 
 # 1. URL은 숨길 필요가 없으므로 직접 입력 (모의투자 또는 실투자 URL)
 host_url = "https://mockapi.kiwoom.com" # 또는 모의투자 URL
@@ -217,6 +218,12 @@ st.sidebar.markdown("---")
 auto_refresh = st.sidebar.checkbox("🔄 1분 자동 갱신 (당일 실시간 모드)", value=False)
 if auto_refresh and target_date_str != datetime.now().strftime('%Y%m%d'):
     st.sidebar.warning("⚠️ 과거 날짜를 볼 때는 자동 갱신을 끄는 것이 좋습니다.")
+
+# ⭐️ 새로 추가된 부드러운 타이머 로직 ⭐️
+if auto_refresh:
+    # 60000 밀리초(60초)마다 화면을 알아서 새로고침하는 백그라운드 타이머 작동!
+    st_autorefresh(interval=60000, limit=None, key="auto_refresh_timer")
+    st.sidebar.success("✅ 실시간 자동 갱신 중... (화면 멈춤 없음)")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🧹 오전 데이터 누락 시 클릭 (캐시 삭제)"):
@@ -518,13 +525,7 @@ if auth_token and len(stock_number) == 6:
             fig.update_yaxes(rangemode="tozero", row=6, col=1, secondary_y=True)
 
             st.plotly_chart(fig, use_container_width=True)
-            # ==============================================================================
 
-            # 👇 (이 아래는 기존 코드 그대로 유지) 👇
-            if auto_refresh:
-                st.toast("⏳ 1분 뒤에 최신 수급을 다시 스캔합니다...")
-                time.sleep(60)
-                st.rerun()
 
         else:
             st.warning("데이터가 없거나 장 시작 전입니다.")
