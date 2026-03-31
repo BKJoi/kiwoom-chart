@@ -444,26 +444,8 @@ if auth_token and len(stock_number) == 6:
         fig.add_trace(go.Bar(x=df.index,y=df['PG_Ratio_1m'],name="1분 관여율(좌측, %)",marker_color=pg_ratio_colors,opacity=0.4), row=6, col=1, secondary_y=False)                   
 
 # ... (이후 20분/60분 평균선 코드는 동일) ...            
-            fig = make_subplots(
-                rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2], 
-                subplot_titles=(
-                    "가격 (한국식 컬러)", 
-                    "거래량", 
-                    "프로그램 수급", 
-                    f"{selected_broker_name1} 수급", 
-                    f"{selected_broker_name2} 수급",
-                    "프로그램 관여율 (막대:1분, 선:20/60 가중평균)" # ⭐️ 제목 수정
-                ),
-                specs=[
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": False}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}], 
-                    [{"secondary_y": True}],
-                    [{"secondary_y": True}]
-                ] 
-            )
+            fig = make_subplots(rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2],subplot_titles=("가격 (한국식 컬러)","거래량","프로그램 수급",f"{selected_broker_name1} 수급",f"{selected_broker_name2} 수급","프로그램 관여율 (막대:1분, 선:20/60 가중평균)" # ⭐️ 제목 수정),
+                specs=[[{"secondary_y": False}],[{"secondary_y": False}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}],[{"secondary_y": True}]] )
 
             # 1층: 가격
             fig.add_trace(go.Candlestick(
