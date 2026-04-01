@@ -264,19 +264,29 @@ if auth_token and len(stock_number) == 6:
                     df_pg['Cum_Sell'] = clean_num(df_pg['prm_sell_qty'])
                     
                     df_pg = df_pg.sort_values('Datetime')
-                    df_pg_min = df_pg.groupby('Datetime').agg({'Cum_Buy': 'last', 'Cum_Sell': 'last'})
+                    
+                    # ⭐️ 핵심 추가: 1분 단위 빈도수(count) 계산
+                    df_pg_min = df_pg.groupby('Datetime').agg({
+                        'Cum_Buy': 'last', 
+                        'Cum_Sell': 'last',
+                        'tm': 'count'  # 1분 동안 들어온 데이터 개수 계산!
+                    })
+                    df_pg_min.rename(columns={'tm': 'PG_Count_1m'}, inplace=True) # 이름 변경
+                    
                     df_pg_min['Buy_1m'] = df_pg_min['Cum_Buy'].diff().fillna(df_pg_min['Cum_Buy']).clip(lower=0)
                     df_pg_min['Sell_1m'] = df_pg_min['Cum_Sell'].diff().fillna(df_pg_min['Cum_Sell']).clip(lower=0)
                     df_pg_min['Cum_Net'] = df_pg_min['Cum_Buy'] - df_pg_min['Cum_Sell']
                     
-                    df = df.join(df_pg_min[['Buy_1m', 'Sell_1m', 'Cum_Net']], how='left')
+                    # ⭐️ 데이터 결합 시 PG_Count_1m 도 포함하여 합칩니다.
+                    df = df.join(df_pg_min[['Buy_1m', 'Sell_1m', 'Cum_Net', 'PG_Count_1m']], how='left')
                     df['Cum_Net'] = df['Cum_Net'].ffill().fillna(0) 
                     df['Buy_1m'] = df['Buy_1m'].fillna(0)          
                     df['Sell_1m'] = df['Sell_1m'].fillna(0)
+                    df['PG_Count_1m'] = df['PG_Count_1m'].fillna(0) # 빈도수가 없으면 0으로 채움
                 else:
-                    df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0
+                    df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0; df['PG_Count_1m'] = 0
             else:
-                df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0
+                df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0; df['PG_Count_1m'] = 0
 
             def process_broker_data(raw_data, lag_sec, suffix):
                 if not raw_data:
@@ -329,8 +339,9 @@ if auth_token and len(stock_number) == 6:
             df['Sell_1m_brk2'] = df['Sell_1m_brk2'].fillna(0)
             df['Cum_Net_brk2'] = df['Cum_Net_brk2'].ffill().fillna(0)
 
+            # ⭐️ 아웃라이어 제거 시 빈도수(PG_Count_1m)도 같이 0으로 지워줍니다.
             mask_outliers = df.index.strftime('%H%M').isin(['0900', '1530'])
-            df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
+            df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2', 'PG_Count_1m']] = 0
 
             df['Max1'] = df['Cum_Net_brk1'].expanding().max()
             df['Min1'] = df['Cum_Net_brk1'].expanding().min()
@@ -349,24 +360,26 @@ if auth_token and len(stock_number) == 6:
             df['Signal_Point'] = df.apply(lambda x: x['Signal_Value'] if x['Signal_Value'] == x['Value_Max'] and x['Signal_Value'] > 0 else pd.NA, axis=1)
 
             # ==============================================================================
-            # 📊 차트 그리기 (5단으로 수정됨)
+            # 📊 차트 그리기 (다시 6단으로 수정됨: 프로그램 빈도수 추가)
             # ==============================================================================
             fig = make_subplots(
-                rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.3, 0.1, 0.2, 0.2, 0.2], # 비율 재조정
+                rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                row_heights=[0.25, 0.1, 0.15, 0.15, 0.15, 0.2], # 비율 재조정
                 subplot_titles=(
                     "가격 (한국식 컬러)", 
                     "거래량", 
                     "프로그램 수급", 
                     f"{selected_broker_name1} 수급", 
-                    f"{selected_broker_name2} 수급"
+                    f"{selected_broker_name2} 수급",
+                    "프로그램 거래 빈도 (1분당 틱 수)" # ⭐️ 6층 제목
                 ),
                 specs=[
                     [{"secondary_y": False}], 
                     [{"secondary_y": False}], 
                     [{"secondary_y": True}], 
                     [{"secondary_y": True}], 
-                    [{"secondary_y": True}]
+                    [{"secondary_y": True}],
+                    [{"secondary_y": False}] # ⭐️ 6층 스펙 (우측 축 불필요)
                 ] 
             )
 
@@ -399,8 +412,14 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Scatter(x=df.index, y=df.apply(lambda r: r['Cum_Net_brk2'] if not pd.isna(r['Signal_Point']) else pd.NA, axis=1), 
                                      mode='markers', name="신호(창구2)", marker=dict(color='red', size=6)), row=5, col=1, secondary_y=True)
 
+            # ⭐️ 6층: 프로그램 거래 빈도 (1분당 데이터 개수)
+            fig.add_trace(go.Bar(
+                x=df.index, y=df['PG_Count_1m'],
+                name="1분당 PG 틱수", marker_color='purple', opacity=0.6
+            ), row=6, col=1)
+
             # 차트 레이아웃 업데이트
-            fig.update_layout(height=1200, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False) # 전체 높이도 1500 -> 1200으로 약간 줄였습니다.
+            fig.update_layout(height=1400, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False) 
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
 
