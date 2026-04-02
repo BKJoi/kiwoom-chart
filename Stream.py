@@ -319,29 +319,32 @@ if auth_token and len(stock_number) == 6:
 
             df_brk1 = process_broker_data(brk_raw1, lag_seconds, 'brk1')
             df = df.join(df_brk1, how='left')
-            df['Buy_1m_brk1'] = df['Buy_1m_brk1'].fillna(0)
-            df['Sell_1m_brk1'] = df['Sell_1m_brk1'].fillna(0)
-            df['Cum_Net_brk1'] = df['Cum_Net_brk1'].ffill().fillna(0)
+            # ⭐️ .astype(float)를 추가해 무조건 숫자로 강제 인식시킵니다.
+            df['Buy_1m_brk1'] = df['Buy_1m_brk1'].fillna(0).astype(float)
+            df['Sell_1m_brk1'] = df['Sell_1m_brk1'].fillna(0).astype(float)
+            df['Cum_Net_brk1'] = df['Cum_Net_brk1'].ffill().fillna(0).astype(float)
 
             df_brk2 = process_broker_data(brk_raw2, lag_seconds, 'brk2')
             df = df.join(df_brk2, how='left')
-            df['Buy_1m_brk2'] = df['Buy_1m_brk2'].fillna(0)
-            df['Sell_1m_brk2'] = df['Sell_1m_brk2'].fillna(0)
-            df['Cum_Net_brk2'] = df['Cum_Net_brk2'].ffill().fillna(0)
+            df['Buy_1m_brk2'] = df['Buy_1m_brk2'].fillna(0).astype(float)
+            df['Sell_1m_brk2'] = df['Sell_1m_brk2'].fillna(0).astype(float)
+            df['Cum_Net_brk2'] = df['Cum_Net_brk2'].ffill().fillna(0).astype(float)
 
             mask_outliers = df.index.strftime('%H%M').isin(['0900', '1530'])
             df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
 
-            df['Max1'] = df['Cum_Net_brk1'].expanding().max()
-            df['Min1'] = df['Cum_Net_brk1'].expanding().min()
-            df['Max2'] = df['Cum_Net_brk2'].expanding().max()
-            df['Min2'] = df['Cum_Net_brk2'].expanding().min()
+            # ⭐️ expanding() 뒤에도 혹시 모를 결측치를 막기 위해 fillna(0) 추가
+            df['Max1'] = df['Cum_Net_brk1'].expanding().max().fillna(0)
+            df['Min1'] = df['Cum_Net_brk1'].expanding().min().fillna(0)
+            df['Max2'] = df['Cum_Net_brk2'].expanding().max().fillna(0)
+            df['Min2'] = df['Cum_Net_brk2'].expanding().min().fillna(0)
 
             df['Pos1'] = (df['Max1'] - df['Cum_Net_brk1']) - (df['Cum_Net_brk1'] - df['Min1'])
             df['Pos2'] = (df['Max2'] - df['Cum_Net_brk2']) - (df['Cum_Net_brk2'] - df['Min2'])
 
             df['Signal_Value'] = 0.0
             mask1 = df['Pos1'] > df['Pos2']
+            # 이제 데이터 타입이 모두 숫자형으로 통일되어 에러가 나지 않습니다.
             df.loc[mask1, 'Signal_Value'] = (df['Max1'] - df['Cum_Net_brk1']) + (df['Cum_Net_brk2'] - df['Min2'])
             df.loc[~mask1, 'Signal_Value'] = (df['Max2'] - df['Cum_Net_brk2']) + (df['Cum_Net_brk1'] - df['Min1'])
 
