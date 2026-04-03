@@ -333,23 +333,25 @@ if auth_token and len(stock_number) == 6:
             mask_outliers = df.index.strftime('%H%M').isin(['0900', '1530'])
             df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
 
-            # ⭐️ expanding() 뒤에도 혹시 모를 결측치를 막기 위해 fillna(0) 추가
-            df['Max1'] = df['Cum_Net_brk1'].expanding().max().fillna(0)
-            df['Min1'] = df['Cum_Net_brk1'].expanding().min().fillna(0)
-            df['Max2'] = df['Cum_Net_brk2'].expanding().max().fillna(0)
-            df['Min2'] = df['Cum_Net_brk2'].expanding().min().fillna(0)
+# ==============================================================================
+            # 🚨 새로운 신호 로직: 1창구와 2창구의 수급 엇갈림 동시 발생 포착
+            # ==============================================================================
+            # 1분 전 대비 누적순매수의 변화량(증감)을 계산합니다.
+            diff_brk1 = df['Cum_Net_brk1'].diff()
+            diff_brk2 = df['Cum_Net_brk2'].diff()
 
-            df['Pos1'] = (df['Max1'] - df['Cum_Net_brk1']) - (df['Cum_Net_brk1'] - df['Min1'])
-            df['Pos2'] = (df['Max2'] - df['Cum_Net_brk2']) - (df['Cum_Net_brk2'] - df['Min2'])
+            # 조건 1: 1창구 하락(음수) AND 2창구 상승(양수) -> 빨간점
+            cond_red = (diff_brk1 < 0) & (diff_brk2 > 0)
+            
+            # 조건 2: 1창구 상승(양수) AND 2창구 하락(음수) -> 파란점
+            cond_blue = (diff_brk1 > 0) & (diff_brk2 < 0)
 
-            df['Signal_Value'] = 0.0
-            mask1 = df['Pos1'] > df['Pos2']
-            # 이제 데이터 타입이 모두 숫자형으로 통일되어 에러가 나지 않습니다.
-            df.loc[mask1, 'Signal_Value'] = (df['Max1'] - df['Cum_Net_brk1']) + (df['Cum_Net_brk2'] - df['Min2'])
-            df.loc[~mask1, 'Signal_Value'] = (df['Max2'] - df['Cum_Net_brk2']) + (df['Cum_Net_brk1'] - df['Min1'])
-
-            df['Value_Max'] = df['Signal_Value'].expanding().max()
-            df['Signal_Point'] = df.apply(lambda x: x['Signal_Value'] if x['Signal_Value'] == x['Value_Max'] and x['Signal_Value'] > 0 else pd.NA, axis=1)
+            # 차트에 점을 찍기 위해, 조건이 맞을 때만 누적순매수 값을 넣고 아니면 빈값(NA) 처리
+            df['Red_Dot_1'] = df['Cum_Net_brk1'].where(cond_red, pd.NA)
+            df['Red_Dot_2'] = df['Cum_Net_brk2'].where(cond_red, pd.NA)
+            
+            df['Blue_Dot_1'] = df['Cum_Net_brk1'].where(cond_blue, pd.NA)
+            df['Blue_Dot_2'] = df['Cum_Net_brk2'].where(cond_blue, pd.NA)
 
             # ==============================================================================
             # 📊 차트 그리기 (5단으로 수정됨)
@@ -392,15 +394,19 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk1'], name=f"{selected_broker_name1} 매수", marker_color='#ff4d4d', opacity=0.4), row=4, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk1'], name=f"{selected_broker_name1} 매도", marker_color='#0066ff', opacity=0.4), row=4, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk1'], mode='lines', name=f"{selected_broker_name1} 누적", line=dict(color='black', width=2)), row=4, col=1, secondary_y=True)
-            fig.add_trace(go.Scatter(x=df.index, y=df.apply(lambda r: r['Cum_Net_brk1'] if not pd.isna(r['Signal_Point']) else pd.NA, axis=1), 
-                                     mode='markers', name="신호(창구1)", marker=dict(color='red', size=6)), row=4, col=1, secondary_y=True)
+            
+            # ⭐️ 4층 신호 추가 (빨간점, 파란점)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Red_Dot_1'], mode='markers', name="1창구 하락/2창구 상승", marker=dict(color='red', size=8)), row=4, col=1, secondary_y=True)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Blue_Dot_1'], mode='markers', name="1창구 상승/2창구 하락", marker=dict(color='blue', size=8)), row=4, col=1, secondary_y=True)
 
             # 5층: 창구 2
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk2'], name=f"{selected_broker_name2} 매수", marker_color='#ff4d4d', opacity=0.4), row=5, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.4), row=5, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적", line=dict(color='black', width=2)), row=5, col=1, secondary_y=True)
-            fig.add_trace(go.Scatter(x=df.index, y=df.apply(lambda r: r['Cum_Net_brk2'] if not pd.isna(r['Signal_Point']) else pd.NA, axis=1), 
-                                     mode='markers', name="신호(창구2)", marker=dict(color='red', size=6)), row=5, col=1, secondary_y=True)
+            
+            # ⭐️ 5층 신호 추가 (빨간점, 파란점)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Red_Dot_2'], mode='markers', name="1창구 하락/2창구 상승", marker=dict(color='red', size=8)), row=5, col=1, secondary_y=True)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Blue_Dot_2'], mode='markers', name="1창구 상승/2창구 하락", marker=dict(color='blue', size=8)), row=5, col=1, secondary_y=True)
 
             # 차트 레이아웃 업데이트
             fig.update_layout(height=1200, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False) # 전체 높이도 1500 -> 1200으로 약간 줄였습니다.
