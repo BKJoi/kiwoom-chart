@@ -157,8 +157,8 @@ def merge_api_data(old_data, new_data):
 # ----------------------------------------------------
 # 2. 메인 화면 및 차트
 # ----------------------------------------------------
-st.set_page_config(page_title="실시간 수급 복기 v2.5", layout="wide")
-st.title("🚀 실시간 주도주 & 거래원 수급 복기 대시보드")
+st.set_page_config(page_title="실시간 수급 복기 v3.0", layout="wide")
+st.title("🚀 실시간 주도주 & 거래원 수급 복기 대시보드 (v3.0)")
 
 if 'data_cache' not in st.session_state:
     st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
@@ -185,6 +185,9 @@ if auth_token:
     target_broker_code2 = broker_dict[selected_broker_name2]
     
 lag_seconds = st.sidebar.slider("⏱️ 창구 시간 보정 (초)", 0, 180, 60)
+
+# 💡 [핵심 패치] 상관계수 계산을 위한 기간(Window) 조절 슬라이더 추가
+corr_window = st.sidebar.slider("🔄 상관계수 기간 (분)", min_value=3, max_value=60, value=15, help="두 창구의 상관성을 분석할 기준 시간(분)을 설정합니다.")
 
 st.sidebar.markdown("---")
 auto_refresh = st.sidebar.checkbox("🔄 1분 자동 갱신 (당일 실시간 모드)", value=False)
@@ -319,7 +322,6 @@ if auth_token and len(stock_number) == 6:
 
             df_brk1 = process_broker_data(brk_raw1, lag_seconds, 'brk1')
             df = df.join(df_brk1, how='left')
-            # ⭐️ .astype(float)를 추가해 무조건 숫자로 강제 인식시킵니다.
             df['Buy_1m_brk1'] = df['Buy_1m_brk1'].fillna(0).astype(float)
             df['Sell_1m_brk1'] = df['Sell_1m_brk1'].fillna(0).astype(float)
             df['Cum_Net_brk1'] = df['Cum_Net_brk1'].ffill().fillna(0).astype(float)
@@ -333,45 +335,46 @@ if auth_token and len(stock_number) == 6:
             mask_outliers = df.index.strftime('%H%M').isin(['0900', '1530'])
             df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
 
-# ==============================================================================
-            # 🚨 새로운 신호 로직: 1창구와 2창구의 수급 엇갈림 동시 발생 포착
             # ==============================================================================
-            # 1분 전 대비 누적순매수의 변화량(증감)을 계산합니다.
+            # 🚨 6단 차트 데이터 연산 (상관계수 계산 패치)
+            # ==============================================================================
             diff_brk1 = df['Cum_Net_brk1'].diff()
             diff_brk2 = df['Cum_Net_brk2'].diff()
 
-            # 조건 1: 1창구 하락(음수) AND 2창구 상승(양수) -> 빨간점
             cond_red = (diff_brk1 < 0) & (diff_brk2 > 0)
-            
-            # 조건 2: 1창구 상승(양수) AND 2창구 하락(음수) -> 파란점
             cond_blue = (diff_brk1 > 0) & (diff_brk2 < 0)
 
-            # 차트에 점을 찍기 위해, 조건이 맞을 때만 누적순매수 값을 넣고 아니면 빈값(NA) 처리
             df['Red_Dot_1'] = df['Cum_Net_brk1'].where(cond_red, pd.NA)
             df['Red_Dot_2'] = df['Cum_Net_brk2'].where(cond_red, pd.NA)
             
             df['Blue_Dot_1'] = df['Cum_Net_brk1'].where(cond_blue, pd.NA)
             df['Blue_Dot_2'] = df['Cum_Net_brk2'].where(cond_blue, pd.NA)
 
+            # 💡 [핵심] Pandas 마법의 연속기: 이동 상관계수 (Rolling Correlation) 도출
+            # 값이 변화가 없어 분산이 0이 되면 NaN이 뜨므로 fillna(0)으로 부드럽게 이어줍니다.
+            df['Correlation'] = df['Cum_Net_brk1'].rolling(window=corr_window, min_periods=2).corr(df['Cum_Net_brk2']).fillna(0)
+
             # ==============================================================================
-            # 📊 차트 그리기 (5단으로 수정됨)
+            # 📊 차트 그리기 (6단으로 진화 완료)
             # ==============================================================================
             fig = make_subplots(
-                rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.3, 0.1, 0.2, 0.2, 0.2], # 비율 재조정
+                rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                row_heights=[0.25, 0.1, 0.12, 0.12, 0.12, 0.19], # 6층 비율 재조정
                 subplot_titles=(
                     "가격 (한국식 컬러)", 
                     "거래량", 
                     "프로그램 수급", 
                     f"{selected_broker_name1} 수급", 
-                    f"{selected_broker_name2} 수급"
+                    f"{selected_broker_name2} 수급",
+                    f"🚨 창구 1 & 2 상관계수 ({corr_window}분 이동평균) - 자전거래 탐지기"
                 ),
                 specs=[
                     [{"secondary_y": False}], 
                     [{"secondary_y": False}], 
                     [{"secondary_y": True}], 
                     [{"secondary_y": True}], 
-                    [{"secondary_y": True}]
+                    [{"secondary_y": True}],
+                    [{"secondary_y": False}] # 6층 상관계수용 공간 추가
                 ] 
             )
 
@@ -395,7 +398,6 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk1'], name=f"{selected_broker_name1} 매도", marker_color='#0066ff', opacity=0.4), row=4, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk1'], mode='lines', name=f"{selected_broker_name1} 누적", line=dict(color='black', width=2)), row=4, col=1, secondary_y=True)
             
-            # ⭐️ 4층 신호 추가 (빨간점, 파란점)
             fig.add_trace(go.Scatter(x=df.index, y=df['Red_Dot_1'], mode='markers', name="1창구 하락/2창구 상승", marker=dict(color='red', size=8)), row=4, col=1, secondary_y=True)
             fig.add_trace(go.Scatter(x=df.index, y=df['Blue_Dot_1'], mode='markers', name="1창구 상승/2창구 하락", marker=dict(color='blue', size=8)), row=4, col=1, secondary_y=True)
 
@@ -404,16 +406,27 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.4), row=5, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적", line=dict(color='black', width=2)), row=5, col=1, secondary_y=True)
             
-            # ⭐️ 5층 신호 추가 (빨간점, 파란점)
             fig.add_trace(go.Scatter(x=df.index, y=df['Red_Dot_2'], mode='markers', name="1창구 하락/2창구 상승", marker=dict(color='red', size=8)), row=5, col=1, secondary_y=True)
             fig.add_trace(go.Scatter(x=df.index, y=df['Blue_Dot_2'], mode='markers', name="1창구 상승/2창구 하락", marker=dict(color='blue', size=8)), row=5, col=1, secondary_y=True)
 
-            # 차트 레이아웃 업데이트
-            fig.update_layout(height=1200, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False) # 전체 높이도 1500 -> 1200으로 약간 줄였습니다.
+            # 💡 [핵심 패치] 6층: 상관계수 오실레이터 추가
+            fig.add_trace(go.Scatter(
+                x=df.index, y=df['Correlation'], mode='lines', name="상관계수", 
+                line=dict(color='purple', width=2), fill='tozeroy', fillcolor='rgba(128, 0, 128, 0.1)'
+            ), row=6, col=1)
+
+            # 6층 기준선 추가 (시각적 가이드)
+            fig.add_hline(y=0, line_dash="dash", line_color="gray", row=6, col=1)
+            fig.add_hline(y=0.7, line_dash="dot", line_color="red", annotation_text="강한 동반 매매 (+0.7)", row=6, col=1)
+            fig.add_hline(y=-0.7, line_dash="dot", line_color="blue", annotation_text="자전거래/핑퐁 (-0.7)", annotation_position="bottom right", row=6, col=1)
+
+            # 차트 레이아웃 업데이트 (6층이 들어갈 수 있도록 전체 높이 증가 1200 -> 1400)
+            fig.update_layout(height=1400, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False) 
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
 
-            # 모든 Y축(세로축)의 숫자를 생략 없이(k 사용 안 함) 콤마 포맷으로 표시
+            # 6층 y축 범위 고정 (-1.1 ~ 1.1)
+            fig.update_yaxes(range=[-1.1, 1.1], row=6, col=1)
             fig.update_yaxes(tickformat=",")
 
             st.plotly_chart(fig, use_container_width=True)
