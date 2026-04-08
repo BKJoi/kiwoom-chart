@@ -187,7 +187,7 @@ if auth_token:
 lag_seconds = st.sidebar.slider("⏱️ 창구 시간 보정 (초)", 0, 180, 60)
 
 # 💡 [핵심 패치] 상관계수 계산을 위한 기간(Window) 조절 슬라이더 추가
-corr_window = st.sidebar.slider("🔄 상관계수 기간 (분)", min_value=3, max_value=60, value=15, help="두 창구의 상관성을 분석할 기준 시간(분)을 설정합니다.")
+corr_window = st.sidebar.slider("🔄 상관계수 기간 (분)", min_value=3, max_value=60, value=30, help="두 창구의 상관성을 분석할 기준 시간(분)을 설정합니다.")
 
 st.sidebar.markdown("---")
 auto_refresh = st.sidebar.checkbox("🔄 1분 자동 갱신 (당일 실시간 모드)", value=False)
