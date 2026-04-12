@@ -261,20 +261,37 @@ if auth_token and len(stock_number) == 6:
             if pg_raw:
                 df_pg = pd.DataFrame(pg_raw)
                 if 'tm' in df_pg.columns and not df_pg.empty:
-                    df_pg['Datetime'] = pd.to_datetime(target_date_str + df_pg['tm'], format='%Y%m%d%H%M%S').dt.floor('min')
-                    def clean_num(s): return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
+                    # 💡 [패치 1] 정밀한 계산을 위해 초(SS)가 포함된 전체 시간을 먼저 생성
+                    df_pg['Full_Time'] = pd.to_datetime(target_date_str + df_pg['tm'], format='%Y%m%d%H%M%S')
+                    # 💡 [패치 2] 그룹화(1분봉)를 위한 분 단위 시간 생성
+                    df_pg['Datetime'] = df_pg['Full_Time'].dt.floor('min')
+                    
+                    def clean_num(s): 
+                        return pd.to_numeric(s.astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
+                    
                     df_pg['Cum_Buy'] = clean_num(df_pg['prm_buy_qty'])
                     df_pg['Cum_Sell'] = clean_num(df_pg['prm_sell_qty'])
                     
-                    df_pg = df_pg.sort_values('Datetime')
+                    # 💡 [패치 3] 초 단위까지 완벽하게 오름차순 정렬 (59초가 01초 뒤로 가게 함)
+                    df_pg = df_pg.sort_values('Full_Time')
+                    
+                    # 💡 [패치 4] 각 '분'의 가장 마지막 데이터(즉, 59초에 가장 가까운 누적치)를 대표값으로 추출
                     df_pg_min = df_pg.groupby('Datetime').agg({'Cum_Buy': 'last', 'Cum_Sell': 'last'})
-                    df_pg_min['Buy_1m'] = df_pg_min['Cum_Buy'].diff().fillna(df_pg_min['Cum_Buy']).clip(lower=0)
-                    df_pg_min['Sell_1m'] = df_pg_min['Cum_Sell'].diff().fillna(df_pg_min['Cum_Sell']).clip(lower=0)
+                    
+                    # 💡 [패치 5] 이빨 빠진 분 데이터 채우기 (Padding)
+                    # 09:00부터 15:30까지 비어있는 분을 생성하고 직전 누적치로 채움
+                    all_minutes = pd.date_range(start=f"{target_date_str} 0900", end=f"{target_date_str} 1530", freq='min')
+                    df_pg_min = df_pg_min.reindex(all_minutes).ffill().fillna(0)
+                    
+                    # 💡 [패치 6] 차분(diff)을 구하되, 첫 행에 전체 누적치가 들어가는 것 방지
+                    df_pg_min['Buy_1m'] = df_pg_min['Cum_Buy'].diff().fillna(0).clip(lower=0)
+                    df_pg_min['Sell_1m'] = df_pg_min['Cum_Sell'].diff().fillna(0).clip(lower=0)
                     df_pg_min['Cum_Net'] = df_pg_min['Cum_Buy'] - df_pg_min['Cum_Sell']
                     
+                    # 메인 차트 데이터(df)와 병합
                     df = df.join(df_pg_min[['Buy_1m', 'Sell_1m', 'Cum_Net']], how='left')
-                    df['Cum_Net'] = df['Cum_Net'].ffill().fillna(0) 
-                    df['Buy_1m'] = df['Buy_1m'].fillna(0)          
+                    df['Cum_Net'] = df['Cum_Net'].ffill().fillna(0)
+                    df['Buy_1m'] = df['Buy_1m'].fillna(0)
                     df['Sell_1m'] = df['Sell_1m'].fillna(0)
                 else:
                     df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0
