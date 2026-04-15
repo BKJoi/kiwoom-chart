@@ -52,7 +52,6 @@ def get_broker_list(token):
             broker_dict[display_name] = item["code"]
     return broker_dict
 
-# 💡 과거 10일 하루 평균 프로그램 거래량 추출 함수
 @st.cache_data(ttl=86400)
 def get_daily_program_avg(token, stock_code, target_date):
     url = f"{host_url}/api/dostk/mrkcond"
@@ -305,15 +304,27 @@ if auth_token and len(stock_number) == 6:
                     df['Buy_1m'] = df['Buy_1m'].fillna(0)
                     df['Sell_1m'] = df['Sell_1m'].fillna(0)
 
-                    # 💡 [핵심 패치] 2% 이상 점(Scatter) 그래프 데이터 생성
+                    # 💡 [핵심 패치] 2% 이상 + 신기록 갱신 시에만 점(Scatter) 생성!
                     if avg_10d_pg_vol > 0:
                         df['PG_1m_Total'] = df['Buy_1m'] + df['Sell_1m']
                         df['PG_Anomaly_Pct'] = (df['PG_1m_Total'] / avg_10d_pg_vol) * 100
                         
-                        # 2% 이상일 때만 점의 Y값을 퍼센트 수치로 저장 (아니면 결측치 처리)
-                        df['Anomaly_Dot'] = df['PG_Anomaly_Pct'].where(df['PG_Anomaly_Pct'] >= 2.0, pd.NA)
-                        # 점 위에 띄울 텍스트 (예: 2.5%)
-                        df['Anomaly_Text'] = df['PG_Anomaly_Pct'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) and x >= 2.0 else "")
+                        anomaly_dots = []
+                        anomaly_texts = []
+                        max_pct = 0.0 # 역대 최고치 기록용
+                        
+                        for val in df['PG_Anomaly_Pct']:
+                            # 2.0 이상이면서 동시에 지금까지의 최고기록을 갈아치울 때만!
+                            if pd.notna(val) and val >= 2.0 and val > max_pct:
+                                max_pct = val
+                                anomaly_dots.append(val)
+                                anomaly_texts.append(f"{val:.1f}") # % 기호 깔끔하게 제거
+                            else:
+                                anomaly_dots.append(pd.NA)
+                                anomaly_texts.append("")
+                                
+                        df['Anomaly_Dot'] = anomaly_dots
+                        df['Anomaly_Text'] = anomaly_texts
                     else:
                         df['Anomaly_Dot'] = pd.NA
                         df['Anomaly_Text'] = ""
@@ -395,12 +406,12 @@ if auth_token and len(stock_number) == 6:
             # ==============================================================================
             fig = make_subplots(
                 rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.25, 0.1, 0.15, 0.1, 0.2, 0.2], # 6층에 맞게 높이 분배
+                row_heights=[0.25, 0.1, 0.15, 0.1, 0.2, 0.2], 
                 subplot_titles=(
                     "가격 (한국식 컬러)", 
                     "거래량", 
                     "프로그램 수급", 
-                    "🚨 프로그램 1분 폭발 (평균치 2% 이상 점그래프)", # 4층 전용 타이틀
+                    "🚨 프로그램 1분 폭발 (평균치 2이상 & 신기록 갱신)", # 4층 전용 타이틀
                     f"{selected_broker_name1} 수급", 
                     f"{selected_broker_name2} 수급"
                 ),
@@ -408,7 +419,7 @@ if auth_token and len(stock_number) == 6:
                     [{"secondary_y": False}], 
                     [{"secondary_y": False}], 
                     [{"secondary_y": True}], 
-                    [{"secondary_y": False}], # 4층 점 그래프는 y축 하나면 됨
+                    [{"secondary_y": False}], 
                     [{"secondary_y": True}], 
                     [{"secondary_y": True}]
                 ] 
@@ -429,18 +440,18 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m'], name="PG 매도", marker_color='#0066ff', opacity=0.7), row=3, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net'], mode='lines', name="PG 누적(우측)", line=dict(color='black', width=2.5)), row=3, col=1, secondary_y=True)
 
-            # 💡 4층: PG 2% 이상 폭발 타점 그래프 (Scatter)
+            # 💡 4층: PG 2 이상 폭발 타점 그래프 (Scatter)
             if 'Anomaly_Dot' in df.columns:
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Anomaly_Dot'], mode='markers+text',
                     text=df['Anomaly_Text'], textposition='top center',
-                    name="2% 이상 폭발타점", marker=dict(color='red', size=8, symbol='circle'),
-                    textfont=dict(color='red', size=11, weight='bold')
+                    name="신기록 폭발타점", marker=dict(color='red', size=8, symbol='circle'),
+                    textfont=dict(color='red', size=12, weight='bold') # 폰트 사이즈 키우고 % 제거
                 ), row=4, col=1)
-                # 4층 기준선 (2% 라인)
-                fig.add_hline(y=2.0, line_dash="dot", line_color="orange", annotation_text="2% 컷오프", row=4, col=1)
+                # 4층 기준선 (2.0 라인)
+                fig.add_hline(y=2.0, line_dash="dot", line_color="orange", annotation_text="2.0 컷오프", row=4, col=1)
 
-            # 5층: 창구 1 (밀려남)
+            # 5층: 창구 1 
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk1'], name=f"{selected_broker_name1} 매수", marker_color='#ff4d4d', opacity=0.4), row=5, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk1'], name=f"{selected_broker_name1} 매도", marker_color='#0066ff', opacity=0.4), row=5, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk1'], mode='lines', name=f"{selected_broker_name1} 누적", line=dict(color='black', width=2)), row=5, col=1, secondary_y=True)
@@ -448,7 +459,7 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Scatter(x=df.index, y=df['Red_Dot_1'], mode='markers', name="1창구 하락/2창구 상승", marker=dict(color='red', size=8)), row=5, col=1, secondary_y=True)
             fig.add_trace(go.Scatter(x=df.index, y=df['Blue_Dot_1'], mode='markers', name="1창구 상승/2창구 하락", marker=dict(color='blue', size=8)), row=5, col=1, secondary_y=True)
 
-            # 6층: 창구 2 (밀려남)
+            # 6층: 창구 2
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk2'], name=f"{selected_broker_name2} 매수", marker_color='#ff4d4d', opacity=0.4), row=6, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk2'], name=f"{selected_broker_name2} 매도", marker_color='#0066ff', opacity=0.4), row=6, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net_brk2'], mode='lines', name=f"{selected_broker_name2} 누적", line=dict(color='black', width=2)), row=6, col=1, secondary_y=True)
@@ -456,7 +467,6 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Scatter(x=df.index, y=df['Red_Dot_2'], mode='markers', name="1창구 하락/2창구 상승", marker=dict(color='red', size=8)), row=6, col=1, secondary_y=True)
             fig.add_trace(go.Scatter(x=df.index, y=df['Blue_Dot_2'], mode='markers', name="1창구 상승/2창구 하락", marker=dict(color='blue', size=8)), row=6, col=1, secondary_y=True)
 
-            # 차트 높이를 6단에 맞게 다시 1400으로 확보
             fig.update_layout(height=1400, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False) 
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
