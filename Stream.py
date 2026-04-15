@@ -6,6 +6,7 @@ from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
+import concurrent.futures 
 
 # 1. URL은 숨길 필요가 없으므로 직접 입력 (모의투자 또는 실투자 URL)
 host_url = "https://mockapi.kiwoom.com" # 또는 모의투자 URL
@@ -186,9 +187,6 @@ if auth_token:
     
 lag_seconds = st.sidebar.slider("⏱️ 창구 시간 보정 (초)", 0, 180, 60)
 
-# 💡 [핵심 패치] 상관계수 계산을 위한 기간(Window) 조절 슬라이더 추가
-corr_window = st.sidebar.slider("🔄 상관계수 기간 (분)", min_value=3, max_value=60, value=30, help="두 창구의 상관성을 분석할 기준 시간(분)을 설정합니다.")
-
 st.sidebar.markdown("---")
 auto_refresh = st.sidebar.checkbox("🔄 1분 자동 갱신 (당일 실시간 모드)", value=False)
 if auto_refresh and target_date_str != datetime.now().strftime('%Y%m%d'):
@@ -204,8 +202,6 @@ if st.sidebar.button("🧹 오전 데이터 누락 시 클릭 (캐시 삭제)"):
     if 'last_search_key' in st.session_state:
         del st.session_state['last_search_key']
     st.rerun()
-
-import concurrent.futures 
 
 if auth_token and len(stock_number) == 6:
     with st.spinner(f"[{stock_number}] 데이터를 병렬로 초고속 수집 중..."):
@@ -261,9 +257,7 @@ if auth_token and len(stock_number) == 6:
             if pg_raw:
                 df_pg = pd.DataFrame(pg_raw)
                 if 'tm' in df_pg.columns and not df_pg.empty:
-                    # 💡 [패치 1] 정밀한 계산을 위해 초(SS)가 포함된 전체 시간을 먼저 생성
                     df_pg['Full_Time'] = pd.to_datetime(target_date_str + df_pg['tm'], format='%Y%m%d%H%M%S')
-                    # 💡 [패치 2] 그룹화(1분봉)를 위한 분 단위 시간 생성
                     df_pg['Datetime'] = df_pg['Full_Time'].dt.floor('min')
                     
                     def clean_num(s): 
@@ -272,23 +266,17 @@ if auth_token and len(stock_number) == 6:
                     df_pg['Cum_Buy'] = clean_num(df_pg['prm_buy_qty'])
                     df_pg['Cum_Sell'] = clean_num(df_pg['prm_sell_qty'])
                     
-                    # 💡 [패치 3] 초 단위까지 완벽하게 오름차순 정렬 (59초가 01초 뒤로 가게 함)
                     df_pg = df_pg.sort_values('Full_Time')
                     
-                    # 💡 [패치 4] 각 '분'의 가장 마지막 데이터(즉, 59초에 가장 가까운 누적치)를 대표값으로 추출
                     df_pg_min = df_pg.groupby('Datetime').agg({'Cum_Buy': 'last', 'Cum_Sell': 'last'})
                     
-                    # 💡 [패치 5] 이빨 빠진 분 데이터 채우기 (Padding)
-                    # 09:00부터 15:30까지 비어있는 분을 생성하고 직전 누적치로 채움
                     all_minutes = pd.date_range(start=f"{target_date_str} 0900", end=f"{target_date_str} 1530", freq='min')
                     df_pg_min = df_pg_min.reindex(all_minutes).ffill().fillna(0)
                     
-                    # 💡 [패치 6] 차분(diff)을 구하되, 첫 행에 전체 누적치가 들어가는 것 방지
                     df_pg_min['Buy_1m'] = df_pg_min['Cum_Buy'].diff().fillna(0).clip(lower=0)
                     df_pg_min['Sell_1m'] = df_pg_min['Cum_Sell'].diff().fillna(0).clip(lower=0)
                     df_pg_min['Cum_Net'] = df_pg_min['Cum_Buy'] - df_pg_min['Cum_Sell']
                     
-                    # 메인 차트 데이터(df)와 병합
                     df = df.join(df_pg_min[['Buy_1m', 'Sell_1m', 'Cum_Net']], how='left')
                     df['Cum_Net'] = df['Cum_Net'].ffill().fillna(0)
                     df['Buy_1m'] = df['Buy_1m'].fillna(0)
@@ -352,9 +340,7 @@ if auth_token and len(stock_number) == 6:
             mask_outliers = df.index.strftime('%H%M').isin(['0900', '1530'])
             df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
 
-            # ==============================================================================
-            # 🚨 6단 차트 데이터 연산 (상관계수 계산 패치)
-            # ==============================================================================
+            # 자전거래/핑퐁 교차 포인트 (기존 기능 유지)
             diff_brk1 = df['Cum_Net_brk1'].diff()
             diff_brk2 = df['Cum_Net_brk2'].diff()
 
@@ -367,31 +353,25 @@ if auth_token and len(stock_number) == 6:
             df['Blue_Dot_1'] = df['Cum_Net_brk1'].where(cond_blue, pd.NA)
             df['Blue_Dot_2'] = df['Cum_Net_brk2'].where(cond_blue, pd.NA)
 
-            # 💡 [핵심] Pandas 마법의 연속기: 이동 상관계수 (Rolling Correlation) 도출
-            # 값이 변화가 없어 분산이 0이 되면 NaN이 뜨므로 fillna(0)으로 부드럽게 이어줍니다.
-            df['Correlation'] = df['Cum_Net_brk1'].rolling(window=corr_window, min_periods=2).corr(df['Cum_Net_brk2']).fillna(0)
-
             # ==============================================================================
-            # 📊 차트 그리기 (6단으로 진화 완료)
+            # 📊 차트 그리기 (5단 레이아웃 복구)
             # ==============================================================================
             fig = make_subplots(
-                rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.25, 0.1, 0.12, 0.12, 0.12, 0.19], # 6층 비율 재조정
+                rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                row_heights=[0.3, 0.1, 0.2, 0.2, 0.2], # 5단 차트에 맞춰 높이 재분배
                 subplot_titles=(
                     "가격 (한국식 컬러)", 
                     "거래량", 
                     "프로그램 수급", 
                     f"{selected_broker_name1} 수급", 
-                    f"{selected_broker_name2} 수급",
-                    f"🚨 창구 1 & 2 상관계수 ({corr_window}분 이동평균) - 자전거래 탐지기"
+                    f"{selected_broker_name2} 수급"
                 ),
                 specs=[
                     [{"secondary_y": False}], 
                     [{"secondary_y": False}], 
                     [{"secondary_y": True}], 
                     [{"secondary_y": True}], 
-                    [{"secondary_y": True}],
-                    [{"secondary_y": False}] # 6층 상관계수용 공간 추가
+                    [{"secondary_y": True}]
                 ] 
             )
 
@@ -426,24 +406,10 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Scatter(x=df.index, y=df['Red_Dot_2'], mode='markers', name="1창구 하락/2창구 상승", marker=dict(color='red', size=8)), row=5, col=1, secondary_y=True)
             fig.add_trace(go.Scatter(x=df.index, y=df['Blue_Dot_2'], mode='markers', name="1창구 상승/2창구 하락", marker=dict(color='blue', size=8)), row=5, col=1, secondary_y=True)
 
-            # 💡 [핵심 패치] 6층: 상관계수 오실레이터 추가
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df['Correlation'], mode='lines', name="상관계수", 
-                line=dict(color='purple', width=2), fill='tozeroy', fillcolor='rgba(128, 0, 128, 0.1)'
-            ), row=6, col=1)
-
-            # 6층 기준선 추가 (시각적 가이드)
-            fig.add_hline(y=0, line_dash="dash", line_color="gray", row=6, col=1)
-            fig.add_hline(y=0.7, line_dash="dot", line_color="red", annotation_text="강한 동반 매매 (+0.7)", row=6, col=1)
-            fig.add_hline(y=-0.7, line_dash="dot", line_color="blue", annotation_text="자전거래/핑퐁 (-0.7)", annotation_position="bottom right", row=6, col=1)
-
-            # 차트 레이아웃 업데이트 (6층이 들어갈 수 있도록 전체 높이 증가 1200 -> 1400)
-            fig.update_layout(height=1400, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False) 
+            # 차트 레이아웃 업데이트 (상관계수가 빠졌으므로 높이를 1200으로 원복)
+            fig.update_layout(height=1200, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False) 
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
-
-            # 6층 y축 범위 고정 (-1.1 ~ 1.1)
-            fig.update_yaxes(range=[-1.1, 1.1], row=6, col=1)
             fig.update_yaxes(tickformat=",")
 
             st.plotly_chart(fig, use_container_width=True)
