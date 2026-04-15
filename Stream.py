@@ -72,12 +72,11 @@ def get_daily_program_avg(token, stock_code, target_date):
             return sum(vols) / len(vols)
     return 0
 
-# 💡 [핵심 수정 1] 차트 함수도 max_pages 변수를 받도록 구조 변경
-def get_historical_minute_chart(token, stock_code, max_pages=500):
+def get_historical_minute_chart(token, stock_code):
     url = f"{host_url}/api/dostk/chart"
     all_chart_data = []
     next_key = ""
-    for i in range(max_pages): 
+    for i in range(5): 
         headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "ka10080", "authorization": f"Bearer {token}"}
         if next_key: headers.update({"cont-yn": "Y", "tr-cont": "Y", "next-key": next_key, "tr-cont-key": next_key})
         data = {"stk_cd": stock_code, "tic_scope": "1", "upd_stkpc_tp": "1"}
@@ -181,11 +180,10 @@ def merge_api_data(old_data, new_data):
 # 2. 메인 화면 및 차트
 # ----------------------------------------------------
 st.set_page_config(page_title="실시간 수급 복기 v3.0", layout="wide")
-st.title("🚀 실시간 주도주 & 거래원 수급 복기 대시보드 (v3.0 - Hybrid Cache)")
+st.title("🚀 실시간 주도주 & 거래원 수급 복기 대시보드 (v3.0)")
 
-# 💡 [핵심 수정 2] 캐시 메모리에는 이제 오직 '차트(가격/거래량)'만 저장합니다!
-if 'data_cache' not in st.session_state or 'chart' not in st.session_state.get('data_cache', {}):
-    st.session_state['data_cache'] = {'chart': []}
+if 'data_cache' not in st.session_state:
+    st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
 
 auth_token = get_access_token()
 
@@ -217,47 +215,51 @@ if auto_refresh and target_date_str != datetime.now().strftime('%Y%m%d'):
 
 if auto_refresh:
     st_autorefresh(interval=60000, limit=None, key="auto_refresh_timer")
-    st.sidebar.success("✅ 실시간 자동 갱신 중... (하이브리드 캐싱 모드)")
+    st.sidebar.success("✅ 실시간 자동 갱신 중... (화면 멈춤 없음)")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🧹 오전 데이터 누락 시 클릭 (캐시 삭제)"):
-    st.session_state['data_cache'] = {'chart': []}
+    st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
     if 'last_search_key' in st.session_state:
         del st.session_state['last_search_key']
     st.rerun()
 
 if auth_token and len(stock_number) == 6:
-    with st.spinner(f"[{stock_number}] 데이터 무결성 스캔 중..."):
+    with st.spinner(f"[{stock_number}] 데이터를 병렬로 초고속 수집 중..."):
         
         current_search_key = f"{stock_number}_{target_date_str}_{target_broker_code1}_{target_broker_code2}"
+        
         is_first_load = 'last_search_key' not in st.session_state or st.session_state['last_search_key'] != current_search_key
         
         if is_first_load:
-            chart_fetch_p = 500  
+            fetch_p = 500  
             st.session_state['last_search_key'] = current_search_key
-            st.session_state['data_cache'] = {'chart': []}
+            st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
         else:
-            chart_fetch_p = 3    
+            fetch_p = 3    
 
-        # 💡 [핵심 수정 3] PG와 창구는 무조건 매 갱신마다 500페이지 풀스캔! (절대 무결성 보장)
-        pg_raw = get_historical_program_data(auth_token, stock_number, target_date_str, 500)
-        time.sleep(0.1)
+        new_pg = get_historical_program_data(auth_token, stock_number, target_date_str, fetch_p)
+        time.sleep(0.3)
 
-        brk_raw1 = get_historical_broker_data(auth_token, stock_number, target_broker_code1, 500)
-        time.sleep(0.1)
+        new_brk1 = get_historical_broker_data(auth_token, stock_number, target_broker_code1, fetch_p)
+        time.sleep(0.3)
 
         if target_broker_code1 == target_broker_code2:
-            brk_raw2 = brk_raw1 
+            new_brk2 = new_brk1 
         else:
-            brk_raw2 = get_historical_broker_data(auth_token, stock_number, target_broker_code2, 500)
-            time.sleep(0.1)
+            new_brk2 = get_historical_broker_data(auth_token, stock_number, target_broker_code2, fetch_p)
+            time.sleep(0.3)
             
-        # 💡 [핵심 수정 4] 가격/거래량(차트)만 캐시를 활용해 증분 수집!
-        new_chart = get_historical_minute_chart(auth_token, stock_number, chart_fetch_p)
-        st.session_state['data_cache']['chart'] = merge_api_data(st.session_state['data_cache']['chart'], new_chart)
-        chart_raw = st.session_state['data_cache']['chart']
-        
+        chart_raw = get_historical_minute_chart(auth_token, stock_number)
         avg_10d_pg_vol = get_daily_program_avg(auth_token, stock_number, target_date_str)
+
+        pg_raw = merge_api_data(st.session_state['data_cache']['pg'], new_pg)
+        brk_raw1 = merge_api_data(st.session_state['data_cache']['brk1'], new_brk1)
+        brk_raw2 = merge_api_data(st.session_state['data_cache']['brk2'], new_brk2)
+
+        st.session_state['data_cache']['pg'] = pg_raw
+        st.session_state['data_cache']['brk1'] = brk_raw1
+        st.session_state['data_cache']['brk2'] = brk_raw2
 
         if chart_raw:
             df = pd.DataFrame(chart_raw)
@@ -302,20 +304,21 @@ if auth_token and len(stock_number) == 6:
                     df['Buy_1m'] = df['Buy_1m'].fillna(0)
                     df['Sell_1m'] = df['Sell_1m'].fillna(0)
 
-                    # 💡 4층: PG 2.0 이상 폭발 & 신기록 갱신 타점
+                    # 💡 [핵심 패치] 2% 이상 + 신기록 갱신 시에만 점(Scatter) 생성!
                     if avg_10d_pg_vol > 0:
                         df['PG_1m_Total'] = df['Buy_1m'] + df['Sell_1m']
                         df['PG_Anomaly_Pct'] = (df['PG_1m_Total'] / avg_10d_pg_vol) * 100
                         
                         anomaly_dots = []
                         anomaly_texts = []
-                        max_pct = 0.0
+                        max_pct = 0.0 # 역대 최고치 기록용
                         
                         for val in df['PG_Anomaly_Pct']:
+                            # 2.0 이상이면서 동시에 지금까지의 최고기록을 갈아치울 때만!
                             if pd.notna(val) and val >= 2.0 and val > max_pct:
                                 max_pct = val
                                 anomaly_dots.append(val)
-                                anomaly_texts.append(f"{val:.1f}") 
+                                anomaly_texts.append(f"{val:.1f}") # % 기호 깔끔하게 제거
                             else:
                                 anomaly_dots.append(pd.NA)
                                 anomaly_texts.append("")
@@ -399,7 +402,7 @@ if auth_token and len(stock_number) == 6:
             df['Blue_Dot_2'] = df['Cum_Net_brk2'].where(cond_blue, pd.NA)
 
             # ==============================================================================
-            # 📊 차트 그리기 (6단 레이아웃 - 절대 안정 렌더링)
+            # 📊 차트 그리기 (6단 레이아웃 - 4층에 점 그래프 추가)
             # ==============================================================================
             fig = make_subplots(
                 rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
@@ -408,7 +411,7 @@ if auth_token and len(stock_number) == 6:
                     "가격 (한국식 컬러)", 
                     "거래량", 
                     "프로그램 수급", 
-                    "🚨 프로그램 1분 폭발 (평균치 2.0 이상 & 신기록 갱신)", 
+                    "🚨 프로그램 1분 폭발 (평균치 2이상 & 신기록 갱신)", # 4층 전용 타이틀
                     f"{selected_broker_name1} 수급", 
                     f"{selected_broker_name2} 수급"
                 ),
@@ -437,14 +440,15 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m'], name="PG 매도", marker_color='#0066ff', opacity=0.7), row=3, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net'], mode='lines', name="PG 누적(우측)", line=dict(color='black', width=2.5)), row=3, col=1, secondary_y=True)
 
-            # 4층: PG 2 이상 폭발 타점 그래프 (Scatter)
+            # 💡 4층: PG 2 이상 폭발 타점 그래프 (Scatter)
             if 'Anomaly_Dot' in df.columns:
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Anomaly_Dot'], mode='markers+text',
                     text=df['Anomaly_Text'], textposition='top center',
                     name="신기록 폭발타점", marker=dict(color='red', size=8, symbol='circle'),
-                    textfont=dict(color='red', size=12, weight='bold') 
+                    textfont=dict(color='red', size=12, weight='bold') # 폰트 사이즈 키우고 % 제거
                 ), row=4, col=1)
+                # 4층 기준선 (2.0 라인)
                 fig.add_hline(y=2.0, line_dash="dot", line_color="orange", annotation_text="2.0 컷오프", row=4, col=1)
 
             # 5층: 창구 1 
