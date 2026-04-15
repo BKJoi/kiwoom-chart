@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import pandas as pd
+import numpy as np
 import time
 from datetime import datetime
 import plotly.graph_objects as go
@@ -50,6 +51,28 @@ def get_broker_list(token):
             display_name = f"{item['name']}({item['code']})"
             broker_dict[display_name] = item["code"]
     return broker_dict
+
+# 💡 [핵심 패치 1] 과거 10일 하루 평균 프로그램 거래량 추출 함수 추가
+@st.cache_data(ttl=86400)
+def get_daily_program_avg(token, stock_code, target_date):
+    url = f"{host_url}/api/dostk/mrkcond"
+    headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "ka90013", "authorization": f"Bearer {token}"}
+    req_data = {"stk_cd": stock_code, "date": target_date, "amt_qty_tp": "2"}
+    res = requests.post(url, headers=headers, json=req_data, timeout=5)
+    
+    if res.status_code == 200:
+        data_list = res.json().get('stk_daly_prm_trde_trnsn', [])
+        vols = []
+        for item in data_list:
+            # 타겟 날짜 '이전'의 과거 10일치만 수집
+            if item.get('dt', '') < target_date:
+                buy = abs(int(str(item.get("prm_buy_qty", "0")).replace("-", "").replace("+", "").replace(",", "") or 0))
+                sell = abs(int(str(item.get("prm_sell_qty", "0")).replace("-", "").replace("+", "").replace(",", "") or 0))
+                vols.append(buy + sell)
+                if len(vols) == 10: break
+        if vols: 
+            return sum(vols) / len(vols)
+    return 0
 
 def get_historical_minute_chart(token, stock_code):
     url = f"{host_url}/api/dostk/chart"
@@ -231,6 +254,9 @@ if auth_token and len(stock_number) == 6:
             
         chart_raw = get_historical_minute_chart(auth_token, stock_number)
 
+        # 💡 [핵심 패치 2] 10일 평균 PG 거래량 수집
+        avg_10d_pg_vol = get_daily_program_avg(auth_token, stock_number, target_date_str)
+
         pg_raw = merge_api_data(st.session_state['data_cache']['pg'], new_pg)
         brk_raw1 = merge_api_data(st.session_state['data_cache']['brk1'], new_brk1)
         brk_raw2 = merge_api_data(st.session_state['data_cache']['brk2'], new_brk2)
@@ -281,10 +307,27 @@ if auth_token and len(stock_number) == 6:
                     df['Cum_Net'] = df['Cum_Net'].ffill().fillna(0)
                     df['Buy_1m'] = df['Buy_1m'].fillna(0)
                     df['Sell_1m'] = df['Sell_1m'].fillna(0)
+
+                    # 💡 [핵심 패치 3] PG 스나이퍼 타점 연산 (1% 이상 필터링)
+                    if avg_10d_pg_vol > 0:
+                        df['PG_1m_Total'] = df['Buy_1m'] + df['Sell_1m']
+                        df['PG_Anomaly_Pct'] = (df['PG_1m_Total'] / avg_10d_pg_vol) * 100
+                        
+                        # 1% 이상인 경우에만 텍스트 생성 (아니면 공백)
+                        df['Anomaly_Text'] = df['PG_Anomaly_Pct'].apply(lambda x: f"<b>🔥{x:.1f}%</b>" if x >= 1.0 else "")
+                        
+                        # 텍스트가 겹치지 않고 막대 위로 예쁘게 뜨도록 Y축 위치 조정 (매수/매도 막대 중 더 큰 쪽의 살짝 위)
+                        df['Anomaly_Y'] = df[['Buy_1m', 'Sell_1m']].max(axis=1).where(df['PG_Anomaly_Pct'] >= 1.0, np.nan) * 1.15
+                    else:
+                        df['Anomaly_Text'] = ""
+                        df['Anomaly_Y'] = np.nan
+
                 else:
                     df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0
+                    df['Anomaly_Text'] = ""; df['Anomaly_Y'] = np.nan
             else:
                 df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0
+                df['Anomaly_Text'] = ""; df['Anomaly_Y'] = np.nan
 
             def process_broker_data(raw_data, lag_sec, suffix):
                 if not raw_data:
@@ -340,7 +383,6 @@ if auth_token and len(stock_number) == 6:
             mask_outliers = df.index.strftime('%H%M').isin(['0900', '1530'])
             df.loc[mask_outliers, ['trde_qty', 'Buy_1m', 'Sell_1m', 'Buy_1m_brk1', 'Sell_1m_brk1', 'Buy_1m_brk2', 'Sell_1m_brk2']] = 0
 
-            # 자전거래/핑퐁 교차 포인트 (기존 기능 유지)
             diff_brk1 = df['Cum_Net_brk1'].diff()
             diff_brk2 = df['Cum_Net_brk2'].diff()
 
@@ -354,15 +396,15 @@ if auth_token and len(stock_number) == 6:
             df['Blue_Dot_2'] = df['Cum_Net_brk2'].where(cond_blue, pd.NA)
 
             # ==============================================================================
-            # 📊 차트 그리기 (5단 레이아웃 복구)
+            # 📊 차트 그리기 (5단 레이아웃)
             # ==============================================================================
             fig = make_subplots(
                 rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                row_heights=[0.3, 0.1, 0.2, 0.2, 0.2], # 5단 차트에 맞춰 높이 재분배
+                row_heights=[0.3, 0.1, 0.2, 0.2, 0.2], 
                 subplot_titles=(
                     "가격 (한국식 컬러)", 
                     "거래량", 
-                    "프로그램 수급", 
+                    "프로그램 수급 (🔥 1% 이상 이상탐지 마커)", 
                     f"{selected_broker_name1} 수급", 
                     f"{selected_broker_name2} 수급"
                 ),
@@ -390,6 +432,15 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m'], name="PG 매도", marker_color='#0066ff', opacity=0.7), row=3, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net'], mode='lines', name="PG 누적(우측)", line=dict(color='black', width=2.5)), row=3, col=1, secondary_y=True)
 
+            # 💡 [핵심 패치 4] 이상탐지 마커 플로팅
+            if 'Anomaly_Y' in df.columns and not df['Anomaly_Y'].isna().all():
+                fig.add_trace(go.Scatter(
+                    x=df.index, y=df['Anomaly_Y'], mode='text',
+                    text=df['Anomaly_Text'], textposition='top center',
+                    textfont=dict(color='red', size=13),
+                    hoverinfo='skip', showlegend=False
+                ), row=3, col=1, secondary_y=False)
+
             # 4층: 창구 1
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk1'], name=f"{selected_broker_name1} 매수", marker_color='#ff4d4d', opacity=0.4), row=4, col=1, secondary_y=False)
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m_brk1'], name=f"{selected_broker_name1} 매도", marker_color='#0066ff', opacity=0.4), row=4, col=1, secondary_y=False)
@@ -406,7 +457,6 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Scatter(x=df.index, y=df['Red_Dot_2'], mode='markers', name="1창구 하락/2창구 상승", marker=dict(color='red', size=8)), row=5, col=1, secondary_y=True)
             fig.add_trace(go.Scatter(x=df.index, y=df['Blue_Dot_2'], mode='markers', name="1창구 상승/2창구 하락", marker=dict(color='blue', size=8)), row=5, col=1, secondary_y=True)
 
-            # 차트 레이아웃 업데이트 (상관계수가 빠졌으므로 높이를 1200으로 원복)
             fig.update_layout(height=1200, template='plotly_white', barmode='relative', hovermode='x unified', showlegend=False) 
             fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="gray", spikethickness=1, spikedash="dot")
             fig.update_layout(xaxis_rangeslider_visible=False)
