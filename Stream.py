@@ -3,21 +3,21 @@ import requests
 import pandas as pd
 import numpy as np
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 import concurrent.futures 
 
 # 1. URL은 숨길 필요가 없으므로 직접 입력 (모의투자 또는 실투자 URL)
-host_url = "https://mockapi.kiwoom.com"
+host_url = "https://mockapi.kiwoom.com" # 또는 모의투자 URL
 
 # 2. 내 진짜 키값은 Streamlit의 안전한 금고(secrets)에서 불러오기!
 app_key = st.secrets["APP_KEY"]
 app_secret = st.secrets["APP_SECRET"]
 
 # ----------------------------------------------------
-# 1. 인증 및 데이터 수집 함수 (가장 안정적인 방식)
+# 1. 인증 및 데이터 수집 함수
 # ----------------------------------------------------
 @st.cache_data(ttl=3000)
 def get_access_token():
@@ -52,7 +52,6 @@ def get_broker_list(token):
             broker_dict[display_name] = item["code"]
     return broker_dict
 
-# 이 부분은 변하지 않는 과거 데이터라 캐싱해도 100% 안전합니다.
 @st.cache_data(ttl=86400)
 def get_daily_program_avg(token, stock_code, target_date):
     url = f"{host_url}/api/dostk/mrkcond"
@@ -73,7 +72,6 @@ def get_daily_program_avg(token, stock_code, target_date):
             return sum(vols) / len(vols)
     return 0
 
-# 가격/거래량 차트는 캐싱하지 않고 매번 정확하게 불러옵니다.
 def get_historical_minute_chart(token, stock_code):
     url = f"{host_url}/api/dostk/chart"
     all_chart_data = []
@@ -182,7 +180,7 @@ def merge_api_data(old_data, new_data):
 # 2. 메인 화면 및 차트
 # ----------------------------------------------------
 st.set_page_config(page_title="실시간 수급 복기 v3.0", layout="wide")
-st.title("🚀 실시간 주도주 & 거래원 수급 복기 대시보드 (v3.0 - Rock Solid)")
+st.title("🚀 실시간 주도주 & 거래원 수급 복기 대시보드 (v3.0)")
 
 if 'data_cache' not in st.session_state:
     st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
@@ -217,7 +215,7 @@ if auto_refresh and target_date_str != datetime.now().strftime('%Y%m%d'):
 
 if auto_refresh:
     st_autorefresh(interval=60000, limit=None, key="auto_refresh_timer")
-    st.sidebar.success("✅ 실시간 자동 갱신 중... (데이터 무결성 최우선 모드)")
+    st.sidebar.success("✅ 실시간 자동 갱신 중... (화면 멈춤 없음)")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🧹 오전 데이터 누락 시 클릭 (캐시 삭제)"):
@@ -227,7 +225,7 @@ if st.sidebar.button("🧹 오전 데이터 누락 시 클릭 (캐시 삭제)"):
     st.rerun()
 
 if auth_token and len(stock_number) == 6:
-    with st.spinner(f"[{stock_number}] 정확도 100% 데이터 수집 중..."):
+    with st.spinner(f"[{stock_number}] 데이터를 병렬로 초고속 수집 중..."):
         
         current_search_key = f"{stock_number}_{target_date_str}_{target_broker_code1}_{target_broker_code2}"
         
@@ -306,20 +304,21 @@ if auth_token and len(stock_number) == 6:
                     df['Buy_1m'] = df['Buy_1m'].fillna(0)
                     df['Sell_1m'] = df['Sell_1m'].fillna(0)
 
-                    # 💡 4층: PG 2.0 이상 폭발 & 신기록 갱신 타점
+                    # 💡 [핵심 패치] 2% 이상 + 신기록 갱신 시에만 점(Scatter) 생성!
                     if avg_10d_pg_vol > 0:
                         df['PG_1m_Total'] = df['Buy_1m'] + df['Sell_1m']
                         df['PG_Anomaly_Pct'] = (df['PG_1m_Total'] / avg_10d_pg_vol) * 100
                         
                         anomaly_dots = []
                         anomaly_texts = []
-                        max_pct = 0.0
+                        max_pct = 0.0 # 역대 최고치 기록용
                         
                         for val in df['PG_Anomaly_Pct']:
+                            # 2.0 이상이면서 동시에 지금까지의 최고기록을 갈아치울 때만!
                             if pd.notna(val) and val >= 2.0 and val > max_pct:
                                 max_pct = val
                                 anomaly_dots.append(val)
-                                anomaly_texts.append(f"{val:.1f}") 
+                                anomaly_texts.append(f"{val:.1f}") # % 기호 깔끔하게 제거
                             else:
                                 anomaly_dots.append(pd.NA)
                                 anomaly_texts.append("")
@@ -403,7 +402,7 @@ if auth_token and len(stock_number) == 6:
             df['Blue_Dot_2'] = df['Cum_Net_brk2'].where(cond_blue, pd.NA)
 
             # ==============================================================================
-            # 📊 차트 그리기 (6단 레이아웃 - 절대 안정 렌더링)
+            # 📊 차트 그리기 (6단 레이아웃 - 4층에 점 그래프 추가)
             # ==============================================================================
             fig = make_subplots(
                 rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
@@ -412,7 +411,7 @@ if auth_token and len(stock_number) == 6:
                     "가격 (한국식 컬러)", 
                     "거래량", 
                     "프로그램 수급", 
-                    "🚨 프로그램 1분 폭발 (평균치 2.0 이상 & 신기록 갱신)", 
+                    "🚨 프로그램 1분 폭발 (평균치 2이상 & 신기록 갱신)", # 4층 전용 타이틀
                     f"{selected_broker_name1} 수급", 
                     f"{selected_broker_name2} 수급"
                 ),
@@ -441,14 +440,15 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m'], name="PG 매도", marker_color='#0066ff', opacity=0.7), row=3, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net'], mode='lines', name="PG 누적(우측)", line=dict(color='black', width=2.5)), row=3, col=1, secondary_y=True)
 
-            # 4층: PG 2 이상 폭발 타점 그래프 (Scatter)
+            # 💡 4층: PG 2 이상 폭발 타점 그래프 (Scatter)
             if 'Anomaly_Dot' in df.columns:
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Anomaly_Dot'], mode='markers+text',
                     text=df['Anomaly_Text'], textposition='top center',
                     name="신기록 폭발타점", marker=dict(color='red', size=8, symbol='circle'),
-                    textfont=dict(color='red', size=12, weight='bold') 
+                    textfont=dict(color='red', size=12, weight='bold') # 폰트 사이즈 키우고 % 제거
                 ), row=4, col=1)
+                # 4층 기준선 (2.0 라인)
                 fig.add_hline(y=2.0, line_dash="dot", line_color="orange", annotation_text="2.0 컷오프", row=4, col=1)
 
             # 5층: 창구 1 
