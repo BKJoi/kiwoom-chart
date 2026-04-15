@@ -3,14 +3,14 @@ import requests
 import pandas as pd
 import numpy as np
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 import concurrent.futures 
 
 # 1. URL은 숨길 필요가 없으므로 직접 입력 (모의투자 또는 실투자 URL)
-host_url = "https://mockapi.kiwoom.com"
+host_url = "https://mockapi.kiwoom.com" # 또는 모의투자 URL
 
 # 2. 내 진짜 키값은 Streamlit의 안전한 금고(secrets)에서 불러오기!
 app_key = st.secrets["APP_KEY"]
@@ -72,7 +72,7 @@ def get_daily_program_avg(token, stock_code, target_date):
             return sum(vols) / len(vols)
     return 0
 
-# 💡 [핵심 수정] 하드코딩된 5페이지를 지우고, max_pages 변수를 받도록 수정!
+# 💡 [핵심 수정 1] 차트 함수도 max_pages 변수를 받도록 구조 변경
 def get_historical_minute_chart(token, stock_code, max_pages=500):
     url = f"{host_url}/api/dostk/chart"
     all_chart_data = []
@@ -181,10 +181,11 @@ def merge_api_data(old_data, new_data):
 # 2. 메인 화면 및 차트
 # ----------------------------------------------------
 st.set_page_config(page_title="실시간 수급 복기 v3.0", layout="wide")
-st.title("🚀 실시간 주도주 & 거래원 수급 복기 대시보드 (v3.0 - Full Data)")
+st.title("🚀 실시간 주도주 & 거래원 수급 복기 대시보드 (v3.0 - Hybrid Cache)")
 
-if 'data_cache' not in st.session_state:
-    st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
+# 💡 [핵심 수정 2] 캐시 메모리에는 이제 오직 '차트(가격/거래량)'만 저장합니다!
+if 'data_cache' not in st.session_state or 'chart' not in st.session_state.get('data_cache', {}):
+    st.session_state['data_cache'] = {'chart': []}
 
 auth_token = get_access_token()
 
@@ -216,53 +217,47 @@ if auto_refresh and target_date_str != datetime.now().strftime('%Y%m%d'):
 
 if auto_refresh:
     st_autorefresh(interval=60000, limit=None, key="auto_refresh_timer")
-    st.sidebar.success("✅ 실시간 자동 갱신 중... (데이터 무결성 100%)")
+    st.sidebar.success("✅ 실시간 자동 갱신 중... (하이브리드 캐싱 모드)")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🧹 오전 데이터 누락 시 클릭 (캐시 삭제)"):
-    st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
+    st.session_state['data_cache'] = {'chart': []}
     if 'last_search_key' in st.session_state:
         del st.session_state['last_search_key']
     st.rerun()
 
 if auth_token and len(stock_number) == 6:
-    with st.spinner(f"[{stock_number}] 아침 9시부터 빈틈없이 풀스캔 중..."):
+    with st.spinner(f"[{stock_number}] 데이터 무결성 스캔 중..."):
         
         current_search_key = f"{stock_number}_{target_date_str}_{target_broker_code1}_{target_broker_code2}"
-        
         is_first_load = 'last_search_key' not in st.session_state or st.session_state['last_search_key'] != current_search_key
         
         if is_first_load:
-            fetch_p = 500  
+            chart_fetch_p = 500  
             st.session_state['last_search_key'] = current_search_key
-            st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
+            st.session_state['data_cache'] = {'chart': []}
         else:
-            fetch_p = 3    
+            chart_fetch_p = 3    
 
-        new_pg = get_historical_program_data(auth_token, stock_number, target_date_str, fetch_p)
-        time.sleep(0.3)
+        # 💡 [핵심 수정 3] PG와 창구는 무조건 매 갱신마다 500페이지 풀스캔! (절대 무결성 보장)
+        pg_raw = get_historical_program_data(auth_token, stock_number, target_date_str, 500)
+        time.sleep(0.1)
 
-        new_brk1 = get_historical_broker_data(auth_token, stock_number, target_broker_code1, fetch_p)
-        time.sleep(0.3)
+        brk_raw1 = get_historical_broker_data(auth_token, stock_number, target_broker_code1, 500)
+        time.sleep(0.1)
 
         if target_broker_code1 == target_broker_code2:
-            new_brk2 = new_brk1 
+            brk_raw2 = brk_raw1 
         else:
-            new_brk2 = get_historical_broker_data(auth_token, stock_number, target_broker_code2, fetch_p)
-            time.sleep(0.3)
+            brk_raw2 = get_historical_broker_data(auth_token, stock_number, target_broker_code2, 500)
+            time.sleep(0.1)
             
-        # 💡 [핵심 수정] 차트 데이터도 fetch_p 변수를 전달하여, 최초 로딩시 500페이지를 긁어옵니다!
-        chart_raw = get_historical_minute_chart(auth_token, stock_number, fetch_p)
+        # 💡 [핵심 수정 4] 가격/거래량(차트)만 캐시를 활용해 증분 수집!
+        new_chart = get_historical_minute_chart(auth_token, stock_number, chart_fetch_p)
+        st.session_state['data_cache']['chart'] = merge_api_data(st.session_state['data_cache']['chart'], new_chart)
+        chart_raw = st.session_state['data_cache']['chart']
         
         avg_10d_pg_vol = get_daily_program_avg(auth_token, stock_number, target_date_str)
-
-        pg_raw = merge_api_data(st.session_state['data_cache']['pg'], new_pg)
-        brk_raw1 = merge_api_data(st.session_state['data_cache']['brk1'], new_brk1)
-        brk_raw2 = merge_api_data(st.session_state['data_cache']['brk2'], new_brk2)
-
-        st.session_state['data_cache']['pg'] = pg_raw
-        st.session_state['data_cache']['brk1'] = brk_raw1
-        st.session_state['data_cache']['brk2'] = brk_raw2
 
         if chart_raw:
             df = pd.DataFrame(chart_raw)
