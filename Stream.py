@@ -95,9 +95,11 @@ def merge_api_data(old_data, new_data):
 st.set_page_config(page_title="초고속 수급 복기 v3.1", layout="wide")
 st.title("🚀 실시간 주도주 & 거래원 수급 복기 대시보드 (v3.1)")
 
-# 💡 [핵심 패치 1] 차트(chart) 데이터를 캐시 저장소에 추가
 if 'data_cache' not in st.session_state:
     st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': [], 'chart': []}
+# 💡 [핵심 패치] 과거 버전의 캐시가 남아있을 경우 'chart' 방을 강제로 추가해주는 방탄 로직
+elif 'chart' not in st.session_state['data_cache']:
+    st.session_state['data_cache']['chart'] = []
 
 auth_token = get_access_token()
 
