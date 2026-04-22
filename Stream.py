@@ -51,7 +51,6 @@ def get_broker_list(token):
             broker_dict[display_name] = item["code"]
     return broker_dict
 
-# 💡 [핵심 패치 1] 단순 평균이 아닌 과거 10일치 일별 PG 거래량을 반환하도록 변경 (P-Score 계산용)
 @st.cache_data(ttl=86400)
 def get_daily_program_data(token, stock_code, target_date):
     url = f"{host_url}/api/dostk/mrkcond"
@@ -250,7 +249,6 @@ if auth_token and len(stock_number) == 6:
             
         chart_raw = get_historical_minute_chart(auth_token, stock_number)
         
-        # 💡 [핵심 패치 2] 10일 평균 대금 계산 방식 변경
         past_pg_dict = get_daily_program_data(auth_token, stock_number, target_date_str)
         avg_10d_pg_vol = sum(past_pg_dict.values()) / len(past_pg_dict) if past_pg_dict else 0
 
@@ -263,7 +261,6 @@ if auth_token and len(stock_number) == 6:
         st.session_state['data_cache']['brk2'] = brk_raw2
 
         if chart_raw:
-            # 💡 [핵심 패치 3] P-Score(Z-Score) 계산을 위한 분봉 기반 10일치 통계 역산
             df_all = pd.DataFrame(chart_raw)
             time_col = 'stk_cntr_tm' if 'stk_cntr_tm' in df_all.columns else 'cntr_tm'
             df_all['Datetime'] = pd.to_datetime(df_all[time_col], format='%Y%m%d%H%M%S')
@@ -283,17 +280,21 @@ if auth_token and len(stock_number) == 6:
                 else:
                     p_ratios[d] = 0
                     
+            # 💡 [핵심 패치] 과거 거래량을 누적이 아닌 5분 단위 '구간 합산'으로 변경!
             df_past = df_all[df_all['Date'].isin(past_dates)].copy().sort_values('Datetime')
-            df_past['Cum_Vol'] = df_past.groupby('Date')['trde_qty'].cumsum()
+            df_past['Datetime_5m'] = df_past['Datetime'].dt.floor('5min')
+            df_past['Time_5m'] = df_past['Datetime_5m'].dt.strftime('%H%M')
             
-            pivot_vol = df_past.pivot_table(index='Time', columns='Date', values='Cum_Vol', aggfunc='last').ffill().fillna(0)
-            for col in pivot_vol.columns:
-                pivot_vol[col] = pivot_vol[col] * p_ratios.get(col, 0)
+            # 각 날짜별 특정 5분 시간대의 거래량 합산
+            pivot_vol_5m = df_past.groupby(['Time_5m', 'Date'])['trde_qty'].sum().unstack().fillna(0)
+            
+            # 해당 일자의 PG 비중을 곱하여 과거 5분 PG 거래량 추정치 계산
+            for col in pivot_vol_5m.columns:
+                pivot_vol_5m[col] = pivot_vol_5m[col] * p_ratios.get(col, 0)
                 
-            mu_s = pivot_vol.mean(axis=1)
-            sigma_s = pivot_vol.std(axis=1).replace(0, 1) # 0 나누기 에러 방지
+            mu_5m = pivot_vol_5m.mean(axis=1)
+            sigma_5m = pivot_vol_5m.std(axis=1).replace(0, 1) # 0 나누기 방지
 
-            # 당일치 데이터 프레임 세팅
             df = df_all[df_all['Date'] == target_date_str].copy()
             df.set_index('Datetime', inplace=True)
             df = df.sort_index()
@@ -313,36 +314,40 @@ if auth_token and len(stock_number) == 6:
                     
                     df_pg['Cum_Buy'] = clean_num(df_pg['prm_buy_qty'])
                     df_pg['Cum_Sell'] = clean_num(df_pg['prm_sell_qty'])
-                    
                     df_pg = df_pg.sort_values('Full_Time')
-                    
                     df_pg_min = df_pg.groupby('Datetime').agg({'Cum_Buy': 'last', 'Cum_Sell': 'last'})
                     
                     all_minutes = pd.date_range(start=f"{target_date_str} 0900", end=f"{target_date_str} 1530", freq='min')
                     df_pg_min = df_pg_min.reindex(all_minutes).ffill().fillna(0)
                     
-                    # 💡 P-Score(5분 꺾은선) 계산 로직 추가
-                    df_pg_min['Cum_PG_Gross'] = df_pg_min['Cum_Buy'] + df_pg_min['Cum_Sell']
-                    df_pg_min['Time'] = df_pg_min.index.strftime('%H%M')
-                    
-                    df_pg_min = df_pg_min.join(mu_s.rename('mu'), on='Time').join(sigma_s.rename('sigma'), on='Time')
-                    df_pg_min['mu'] = df_pg_min['mu'].fillna(0)
-                    df_pg_min['sigma'] = df_pg_min['sigma'].fillna(1)
-                    
-                    df_pg_min['P_Score'] = (df_pg_min['Cum_PG_Gross'] - df_pg_min['mu']) / df_pg_min['sigma']
-
                     df_pg_min['Buy_1m'] = df_pg_min['Cum_Buy'].diff().fillna(0).clip(lower=0)
                     df_pg_min['Sell_1m'] = df_pg_min['Cum_Sell'].diff().fillna(0).clip(lower=0)
                     df_pg_min['Cum_Net'] = df_pg_min['Cum_Buy'] - df_pg_min['Cum_Sell']
                     
-                    df = df.join(df_pg_min[['Buy_1m', 'Sell_1m', 'Cum_Net', 'P_Score']], how='left')
+                    # 💡 당일 1분 PG 거래량을 5분 단위로 그룹화하여 5분 P-Score 계산!
+                    df_pg_min['PG_Gross_1m'] = df_pg_min['Buy_1m'] + df_pg_min['Sell_1m']
+                    df_pg_min['Datetime_5m'] = df_pg_min.index.floor('5min')
+                    
+                    pg_5m_sum = df_pg_min.groupby('Datetime_5m')['PG_Gross_1m'].sum().reset_index()
+                    pg_5m_sum['Time_5m'] = pg_5m_sum['Datetime_5m'].dt.strftime('%H%M')
+                    
+                    # 과거 10일 평균(mu)과 편차(sigma) 결합
+                    pg_5m_sum = pg_5m_sum.join(mu_5m.rename('mu'), on='Time_5m').join(sigma_5m.rename('sigma'), on='Time_5m')
+                    pg_5m_sum['mu'] = pg_5m_sum['mu'].fillna(0)
+                    pg_5m_sum['sigma'] = pg_5m_sum['sigma'].fillna(1)
+                    
+                    # 당일 5분 P-Score 계산 완료!
+                    pg_5m_sum['P_Score_5m_val'] = (pg_5m_sum['PG_Gross_1m'] - pg_5m_sum['mu']) / pg_5m_sum['sigma']
+                    pg_5m_sum.set_index('Datetime_5m', inplace=True)
+                    
+                    # 다시 1분봉(df_pg_min) 메인 테이블에 조인 (5분 정각에만 값이 들어감)
+                    df_pg_min = df_pg_min.join(pg_5m_sum[['P_Score_5m_val']], how='left')
+                    df_pg_min['P_Score_5m'] = df_pg_min['P_Score_5m_val']
+                    
+                    df = df.join(df_pg_min[['Buy_1m', 'Sell_1m', 'Cum_Net', 'P_Score_5m']], how='left')
                     df['Cum_Net'] = df['Cum_Net'].ffill().fillna(0)
                     df['Buy_1m'] = df['Buy_1m'].fillna(0)
                     df['Sell_1m'] = df['Sell_1m'].fillna(0)
-                    
-                    # 5분마다 P-Score 점을 찍기 위한 컬럼 (선 연결을 위해 NaN 활용)
-                    mask_5m = df.index.minute % 5 == 0
-                    df['P_Score_5m'] = df['P_Score'].where(mask_5m, pd.NA)
 
                     if avg_10d_pg_vol > 0:
                         df['PG_1m_Total'] = df['Buy_1m'] + df['Sell_1m']
@@ -449,7 +454,7 @@ if auth_token and len(stock_number) == 6:
                     "가격 (한국식 컬러)", 
                     "거래량", 
                     "프로그램 수급", 
-                    "🚨 프로그램 폭발 타점 (Pratio Max) & P-Score 추이", # 💡 4층 타이틀 변경
+                    "🚨 프로그램 폭발 타점 (좌측) & 5분 P-Score 추이 (우측)", 
                     f"{selected_broker_name1} 수급", 
                     f"{selected_broker_name2} 수급"
                 ),
@@ -457,7 +462,7 @@ if auth_token and len(stock_number) == 6:
                     [{"secondary_y": False}], 
                     [{"secondary_y": False}], 
                     [{"secondary_y": True}], 
-                    [{"secondary_y": True}], # 💡 4층 우측 Y축(secondary_y) 활성화
+                    [{"secondary_y": True}], 
                     [{"secondary_y": True}], 
                     [{"secondary_y": True}]
                 ] 
@@ -488,14 +493,13 @@ if auth_token and len(stock_number) == 6:
                 ), row=4, col=1, secondary_y=False)
                 fig.add_hline(y=2.0, line_dash="dot", line_color="orange", annotation_text="2.0 컷오프", row=4, col=1, secondary_y=False)
 
-            # 💡 4층: P-Score 5분 꺾은선 추가 (신규, 우측 Y축)
+            # 💡 4층: 5분 P-Score 꺾은선 그래프 추가 (우측 Y축)
             if 'P_Score_5m' in df.columns:
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['P_Score_5m'], mode='lines+markers',
-                    name="P-Score (우측, 5분)", line=dict(color='#9370DB', width=2), # 눈에 띄는 보라색
-                    marker=dict(size=6, color='#9370DB'), connectgaps=True
+                    name="5분 P-Score (우측)", line=dict(color='#9370DB', width=2), # 눈에 확 띄는 보라색
+                    marker=dict(size=6, color='#9370DB'), connectgaps=True # 점들을 부드럽게 이어줌
                 ), row=4, col=1, secondary_y=True)
-                # P-Score 용 0점 기준선
                 fig.add_hline(y=0, line_dash="dash", line_color="gray", row=4, col=1, secondary_y=True)
 
             # 5층: 창구 1 
