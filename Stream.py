@@ -7,7 +7,6 @@ from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
-import concurrent.futures 
 
 # 1. URL은 숨길 필요가 없으므로 직접 입력 (모의투자 또는 실투자 URL)
 host_url = "https://mockapi.kiwoom.com" # 또는 모의투자 URL
@@ -52,25 +51,25 @@ def get_broker_list(token):
             broker_dict[display_name] = item["code"]
     return broker_dict
 
+# 💡 [핵심 패치 1] 단순 평균이 아닌 과거 10일치 일별 PG 거래량을 반환하도록 변경 (P-Score 계산용)
 @st.cache_data(ttl=86400)
-def get_daily_program_avg(token, stock_code, target_date):
+def get_daily_program_data(token, stock_code, target_date):
     url = f"{host_url}/api/dostk/mrkcond"
     headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "ka90013", "authorization": f"Bearer {token}"}
     req_data = {"stk_cd": stock_code, "date": target_date, "amt_qty_tp": "2"}
     res = requests.post(url, headers=headers, json=req_data, timeout=5)
     
+    past_pg_vols = {}
     if res.status_code == 200:
         data_list = res.json().get('stk_daly_prm_trde_trnsn', [])
-        vols = []
         for item in data_list:
-            if item.get('dt', '') < target_date:
+            dt = item.get('dt', '')
+            if dt < target_date:
                 buy = abs(int(str(item.get("prm_buy_qty", "0")).replace("-", "").replace("+", "").replace(",", "") or 0))
                 sell = abs(int(str(item.get("prm_sell_qty", "0")).replace("-", "").replace("+", "").replace(",", "") or 0))
-                vols.append(buy + sell)
-                if len(vols) == 10: break
-        if vols: 
-            return sum(vols) / len(vols)
-    return 0
+                past_pg_vols[dt] = buy + sell
+                if len(past_pg_vols) == 10: break
+    return past_pg_vols
 
 def get_historical_minute_chart(token, stock_code):
     url = f"{host_url}/api/dostk/chart"
@@ -228,7 +227,6 @@ if auth_token and len(stock_number) == 6:
     with st.spinner(f"[{stock_number}] 데이터를 병렬로 초고속 수집 중..."):
         
         current_search_key = f"{stock_number}_{target_date_str}_{target_broker_code1}_{target_broker_code2}"
-        
         is_first_load = 'last_search_key' not in st.session_state or st.session_state['last_search_key'] != current_search_key
         
         if is_first_load:
@@ -236,7 +234,7 @@ if auth_token and len(stock_number) == 6:
             st.session_state['last_search_key'] = current_search_key
             st.session_state['data_cache'] = {'pg': [], 'brk1': [], 'brk2': []}
         else:
-            fetch_p = 3    
+            fetch_p = 3   
 
         new_pg = get_historical_program_data(auth_token, stock_number, target_date_str, fetch_p)
         time.sleep(0.3)
@@ -251,7 +249,10 @@ if auth_token and len(stock_number) == 6:
             time.sleep(0.3)
             
         chart_raw = get_historical_minute_chart(auth_token, stock_number)
-        avg_10d_pg_vol = get_daily_program_avg(auth_token, stock_number, target_date_str)
+        
+        # 💡 [핵심 패치 2] 10일 평균 대금 계산 방식 변경
+        past_pg_dict = get_daily_program_data(auth_token, stock_number, target_date_str)
+        avg_10d_pg_vol = sum(past_pg_dict.values()) / len(past_pg_dict) if past_pg_dict else 0
 
         pg_raw = merge_api_data(st.session_state['data_cache']['pg'], new_pg)
         brk_raw1 = merge_api_data(st.session_state['data_cache']['brk1'], new_brk1)
@@ -262,20 +263,45 @@ if auth_token and len(stock_number) == 6:
         st.session_state['data_cache']['brk2'] = brk_raw2
 
         if chart_raw:
-            df = pd.DataFrame(chart_raw)
-            time_col = 'stk_cntr_tm' if 'stk_cntr_tm' in df.columns else 'cntr_tm'
-            df['Datetime'] = pd.to_datetime(df[time_col], format='%Y%m%d%H%M%S')
-            df.set_index('Datetime', inplace=True)
+            # 💡 [핵심 패치 3] P-Score(Z-Score) 계산을 위한 분봉 기반 10일치 통계 역산
+            df_all = pd.DataFrame(chart_raw)
+            time_col = 'stk_cntr_tm' if 'stk_cntr_tm' in df_all.columns else 'cntr_tm'
+            df_all['Datetime'] = pd.to_datetime(df_all[time_col], format='%Y%m%d%H%M%S')
+            df_all['Date'] = df_all['Datetime'].dt.strftime('%Y%m%d')
+            df_all['Time'] = df_all['Datetime'].dt.strftime('%H%M')
             
-            df = df[df.index.strftime('%Y%m%d') == target_date_str].sort_index()
+            for col in ['open_pric', 'high_pric', 'low_pric', 'cur_prc', 'trde_qty']:
+                df_all[col] = df_all[col].astype(str).str.replace('+', '', regex=False).str.replace('-', '', regex=False).str.replace(',', '', regex=False).astype(int)
+
+            past_dates = df_all[df_all['Date'] < target_date_str]['Date'].unique()[:10]
+            daily_total_vols = df_all[df_all['Date'].isin(past_dates)].groupby('Date')['trde_qty'].sum()
+            
+            p_ratios = {}
+            for d in past_dates:
+                if d in past_pg_dict and d in daily_total_vols and daily_total_vols[d] > 0:
+                    p_ratios[d] = past_pg_dict[d] / daily_total_vols[d]
+                else:
+                    p_ratios[d] = 0
+                    
+            df_past = df_all[df_all['Date'].isin(past_dates)].copy().sort_values('Datetime')
+            df_past['Cum_Vol'] = df_past.groupby('Date')['trde_qty'].cumsum()
+            
+            pivot_vol = df_past.pivot_table(index='Time', columns='Date', values='Cum_Vol', aggfunc='last').ffill().fillna(0)
+            for col in pivot_vol.columns:
+                pivot_vol[col] = pivot_vol[col] * p_ratios.get(col, 0)
+                
+            mu_s = pivot_vol.mean(axis=1)
+            sigma_s = pivot_vol.std(axis=1).replace(0, 1) # 0 나누기 에러 방지
+
+            # 당일치 데이터 프레임 세팅
+            df = df_all[df_all['Date'] == target_date_str].copy()
+            df.set_index('Datetime', inplace=True)
+            df = df.sort_index()
 
             if df.empty:
                 st.info("⏳ 선택하신 날짜의 데이터가 아직 없거나 장 시작 대기 중입니다.")
                 st.stop() 
             
-            for col in ['open_pric', 'high_pric', 'low_pric', 'cur_prc', 'trde_qty']:
-                df[col] = df[col].astype(str).str.replace('+', '', regex=False).str.replace('-', '', regex=False).str.replace(',', '', regex=False).astype(int)
-
             if pg_raw:
                 df_pg = pd.DataFrame(pg_raw)
                 if 'tm' in df_pg.columns and not df_pg.empty:
@@ -295,30 +321,42 @@ if auth_token and len(stock_number) == 6:
                     all_minutes = pd.date_range(start=f"{target_date_str} 0900", end=f"{target_date_str} 1530", freq='min')
                     df_pg_min = df_pg_min.reindex(all_minutes).ffill().fillna(0)
                     
+                    # 💡 P-Score(5분 꺾은선) 계산 로직 추가
+                    df_pg_min['Cum_PG_Gross'] = df_pg_min['Cum_Buy'] + df_pg_min['Cum_Sell']
+                    df_pg_min['Time'] = df_pg_min.index.strftime('%H%M')
+                    
+                    df_pg_min = df_pg_min.join(mu_s.rename('mu'), on='Time').join(sigma_s.rename('sigma'), on='Time')
+                    df_pg_min['mu'] = df_pg_min['mu'].fillna(0)
+                    df_pg_min['sigma'] = df_pg_min['sigma'].fillna(1)
+                    
+                    df_pg_min['P_Score'] = (df_pg_min['Cum_PG_Gross'] - df_pg_min['mu']) / df_pg_min['sigma']
+
                     df_pg_min['Buy_1m'] = df_pg_min['Cum_Buy'].diff().fillna(0).clip(lower=0)
                     df_pg_min['Sell_1m'] = df_pg_min['Cum_Sell'].diff().fillna(0).clip(lower=0)
                     df_pg_min['Cum_Net'] = df_pg_min['Cum_Buy'] - df_pg_min['Cum_Sell']
                     
-                    df = df.join(df_pg_min[['Buy_1m', 'Sell_1m', 'Cum_Net']], how='left')
+                    df = df.join(df_pg_min[['Buy_1m', 'Sell_1m', 'Cum_Net', 'P_Score']], how='left')
                     df['Cum_Net'] = df['Cum_Net'].ffill().fillna(0)
                     df['Buy_1m'] = df['Buy_1m'].fillna(0)
                     df['Sell_1m'] = df['Sell_1m'].fillna(0)
+                    
+                    # 5분마다 P-Score 점을 찍기 위한 컬럼 (선 연결을 위해 NaN 활용)
+                    mask_5m = df.index.minute % 5 == 0
+                    df['P_Score_5m'] = df['P_Score'].where(mask_5m, pd.NA)
 
-                    # 💡 [핵심 패치] 2% 이상 + 신기록 갱신 시에만 점(Scatter) 생성!
                     if avg_10d_pg_vol > 0:
                         df['PG_1m_Total'] = df['Buy_1m'] + df['Sell_1m']
                         df['PG_Anomaly_Pct'] = (df['PG_1m_Total'] / avg_10d_pg_vol) * 100
                         
                         anomaly_dots = []
                         anomaly_texts = []
-                        max_pct = 0.0 # 역대 최고치 기록용
+                        max_pct = 0.0 
                         
                         for val in df['PG_Anomaly_Pct']:
-                            # 2.0 이상이면서 동시에 지금까지의 최고기록을 갈아치울 때만!
                             if pd.notna(val) and val >= 2.0 and val > max_pct:
                                 max_pct = val
                                 anomaly_dots.append(val)
-                                anomaly_texts.append(f"{val:.1f}") # % 기호 깔끔하게 제거
+                                anomaly_texts.append(f"{val:.1f}") 
                             else:
                                 anomaly_dots.append(pd.NA)
                                 anomaly_texts.append("")
@@ -329,10 +367,10 @@ if auth_token and len(stock_number) == 6:
                         df['Anomaly_Dot'] = pd.NA
                         df['Anomaly_Text'] = ""
                 else:
-                    df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0
+                    df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0; df['P_Score_5m'] = pd.NA
                     df['Anomaly_Dot'] = pd.NA; df['Anomaly_Text'] = ""
             else:
-                df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0
+                df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0; df['P_Score_5m'] = pd.NA
                 df['Anomaly_Dot'] = pd.NA; df['Anomaly_Text'] = ""
 
             def process_broker_data(raw_data, lag_sec, suffix):
@@ -402,7 +440,7 @@ if auth_token and len(stock_number) == 6:
             df['Blue_Dot_2'] = df['Cum_Net_brk2'].where(cond_blue, pd.NA)
 
             # ==============================================================================
-            # 📊 차트 그리기 (6단 레이아웃 - 4층에 점 그래프 추가)
+            # 📊 차트 그리기 (6단 레이아웃)
             # ==============================================================================
             fig = make_subplots(
                 rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.03,
@@ -411,7 +449,7 @@ if auth_token and len(stock_number) == 6:
                     "가격 (한국식 컬러)", 
                     "거래량", 
                     "프로그램 수급", 
-                    "🚨 프로그램 1분 폭발 (평균치 2이상 & 신기록 갱신)", # 4층 전용 타이틀
+                    "🚨 프로그램 폭발 타점 (Pratio Max) & P-Score 추이", # 💡 4층 타이틀 변경
                     f"{selected_broker_name1} 수급", 
                     f"{selected_broker_name2} 수급"
                 ),
@@ -419,7 +457,7 @@ if auth_token and len(stock_number) == 6:
                     [{"secondary_y": False}], 
                     [{"secondary_y": False}], 
                     [{"secondary_y": True}], 
-                    [{"secondary_y": False}], 
+                    [{"secondary_y": True}], # 💡 4층 우측 Y축(secondary_y) 활성화
                     [{"secondary_y": True}], 
                     [{"secondary_y": True}]
                 ] 
@@ -440,16 +478,25 @@ if auth_token and len(stock_number) == 6:
             fig.add_trace(go.Bar(x=df.index, y=-df['Sell_1m'], name="PG 매도", marker_color='#0066ff', opacity=0.7), row=3, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['Cum_Net'], mode='lines', name="PG 누적(우측)", line=dict(color='black', width=2.5)), row=3, col=1, secondary_y=True)
 
-            # 💡 4층: PG 2 이상 폭발 타점 그래프 (Scatter)
+            # 💡 4층: Pratio Max 폭발 타점 (기존, 좌측 Y축)
             if 'Anomaly_Dot' in df.columns:
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Anomaly_Dot'], mode='markers+text',
                     text=df['Anomaly_Text'], textposition='top center',
                     name="신기록 폭발타점", marker=dict(color='red', size=8, symbol='circle'),
-                    textfont=dict(color='red', size=12, weight='bold') # 폰트 사이즈 키우고 % 제거
-                ), row=4, col=1)
-                # 4층 기준선 (2.0 라인)
-                fig.add_hline(y=2.0, line_dash="dot", line_color="orange", annotation_text="2.0 컷오프", row=4, col=1)
+                    textfont=dict(color='red', size=12, weight='bold') 
+                ), row=4, col=1, secondary_y=False)
+                fig.add_hline(y=2.0, line_dash="dot", line_color="orange", annotation_text="2.0 컷오프", row=4, col=1, secondary_y=False)
+
+            # 💡 4층: P-Score 5분 꺾은선 추가 (신규, 우측 Y축)
+            if 'P_Score_5m' in df.columns:
+                fig.add_trace(go.Scatter(
+                    x=df.index, y=df['P_Score_5m'], mode='lines+markers',
+                    name="P-Score (우측, 5분)", line=dict(color='#9370DB', width=2), # 눈에 띄는 보라색
+                    marker=dict(size=6, color='#9370DB'), connectgaps=True
+                ), row=4, col=1, secondary_y=True)
+                # P-Score 용 0점 기준선
+                fig.add_hline(y=0, line_dash="dash", line_color="gray", row=4, col=1, secondary_y=True)
 
             # 5층: 창구 1 
             fig.add_trace(go.Bar(x=df.index, y=df['Buy_1m_brk1'], name=f"{selected_broker_name1} 매수", marker_color='#ff4d4d', opacity=0.4), row=5, col=1, secondary_y=False)
