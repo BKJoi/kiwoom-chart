@@ -249,6 +249,7 @@ if auth_token and len(stock_number) == 6:
             
         chart_raw = get_historical_minute_chart(auth_token, stock_number)
         
+        # 💡 Pratio Max (폭발 타점) 계산을 위해 과거 일일 PG 평균은 계속 유지합니다.
         past_pg_dict = get_daily_program_data(auth_token, stock_number, target_date_str)
         avg_10d_pg_vol = sum(past_pg_dict.values()) / len(past_pg_dict) if past_pg_dict else 0
 
@@ -270,30 +271,19 @@ if auth_token and len(stock_number) == 6:
             for col in ['open_pric', 'high_pric', 'low_pric', 'cur_prc', 'trde_qty']:
                 df_all[col] = df_all[col].astype(str).str.replace('+', '', regex=False).str.replace('-', '', regex=False).str.replace(',', '', regex=False).astype(int)
 
+            # 💡 [핵심 패치] P-Score 대신 Z-Score(전체 거래량) 계산용 과거 데이터 처리
             past_dates = df_all[df_all['Date'] < target_date_str]['Date'].unique()[:10]
-            daily_total_vols = df_all[df_all['Date'].isin(past_dates)].groupby('Date')['trde_qty'].sum()
             
-            p_ratios = {}
-            for d in past_dates:
-                if d in past_pg_dict and d in daily_total_vols and daily_total_vols[d] > 0:
-                    p_ratios[d] = past_pg_dict[d] / daily_total_vols[d]
-                else:
-                    p_ratios[d] = 0
-                    
-            # 💡 [핵심 패치] 과거 거래량을 누적이 아닌 5분 단위 '구간 합산'으로 변경!
             df_past = df_all[df_all['Date'].isin(past_dates)].copy().sort_values('Datetime')
             df_past['Datetime_5m'] = df_past['Datetime'].dt.floor('5min')
             df_past['Time_5m'] = df_past['Datetime_5m'].dt.strftime('%H%M')
             
-            # 각 날짜별 특정 5분 시간대의 거래량 합산
+            # 과거 각 날짜별 특정 5분 시간대의 전체 거래량 합산
             pivot_vol_5m = df_past.groupby(['Time_5m', 'Date'])['trde_qty'].sum().unstack().fillna(0)
             
-            # 해당 일자의 PG 비중을 곱하여 과거 5분 PG 거래량 추정치 계산
-            for col in pivot_vol_5m.columns:
-                pivot_vol_5m[col] = pivot_vol_5m[col] * p_ratios.get(col, 0)
-                
+            # PG 비중 곱하는 로직 삭제 -> 순수 거래량 기준 Z-Score 모드
             mu_5m = pivot_vol_5m.mean(axis=1)
-            sigma_5m = pivot_vol_5m.std(axis=1).replace(0, 1) # 0 나누기 방지
+            sigma_5m = pivot_vol_5m.std(axis=1).replace(0, 1) # 0 나누기 에러 방지
 
             df = df_all[df_all['Date'] == target_date_str].copy()
             df.set_index('Datetime', inplace=True)
@@ -303,6 +293,25 @@ if auth_token and len(stock_number) == 6:
                 st.info("⏳ 선택하신 날짜의 데이터가 아직 없거나 장 시작 대기 중입니다.")
                 st.stop() 
             
+            # 💡 [당일 5분 Z-Score 계산]
+            df_vol_min = df[['trde_qty']].copy()
+            df_vol_min['Datetime_5m'] = df_vol_min.index.floor('5min')
+            
+            vol_5m_sum = df_vol_min.groupby('Datetime_5m')['trde_qty'].sum().reset_index()
+            vol_5m_sum['Time_5m'] = vol_5m_sum['Datetime_5m'].dt.strftime('%H%M')
+            
+            vol_5m_sum = vol_5m_sum.join(mu_5m.rename('mu'), on='Time_5m').join(sigma_5m.rename('sigma'), on='Time_5m')
+            vol_5m_sum['mu'] = vol_5m_sum['mu'].fillna(0)
+            vol_5m_sum['sigma'] = vol_5m_sum['sigma'].fillna(1)
+            
+            vol_5m_sum['Z_Score_5m_val'] = (vol_5m_sum['trde_qty'] - vol_5m_sum['mu']) / vol_5m_sum['sigma']
+            vol_5m_sum.set_index('Datetime_5m', inplace=True)
+            
+            # 계산된 5분 Z-Score를 메인 데이터프레임(df)에 매핑
+            df = df.join(vol_5m_sum[['Z_Score_5m_val']], how='left')
+            df['Z_Score_5m'] = df['Z_Score_5m_val']
+
+            # PG 데이터 연산 (기존 로직 유지)
             if pg_raw:
                 df_pg = pd.DataFrame(pg_raw)
                 if 'tm' in df_pg.columns and not df_pg.empty:
@@ -324,27 +333,7 @@ if auth_token and len(stock_number) == 6:
                     df_pg_min['Sell_1m'] = df_pg_min['Cum_Sell'].diff().fillna(0).clip(lower=0)
                     df_pg_min['Cum_Net'] = df_pg_min['Cum_Buy'] - df_pg_min['Cum_Sell']
                     
-                    # 💡 당일 1분 PG 거래량을 5분 단위로 그룹화하여 5분 P-Score 계산!
-                    df_pg_min['PG_Gross_1m'] = df_pg_min['Buy_1m'] + df_pg_min['Sell_1m']
-                    df_pg_min['Datetime_5m'] = df_pg_min.index.floor('5min')
-                    
-                    pg_5m_sum = df_pg_min.groupby('Datetime_5m')['PG_Gross_1m'].sum().reset_index()
-                    pg_5m_sum['Time_5m'] = pg_5m_sum['Datetime_5m'].dt.strftime('%H%M')
-                    
-                    # 과거 10일 평균(mu)과 편차(sigma) 결합
-                    pg_5m_sum = pg_5m_sum.join(mu_5m.rename('mu'), on='Time_5m').join(sigma_5m.rename('sigma'), on='Time_5m')
-                    pg_5m_sum['mu'] = pg_5m_sum['mu'].fillna(0)
-                    pg_5m_sum['sigma'] = pg_5m_sum['sigma'].fillna(1)
-                    
-                    # 당일 5분 P-Score 계산 완료!
-                    pg_5m_sum['P_Score_5m_val'] = (pg_5m_sum['PG_Gross_1m'] - pg_5m_sum['mu']) / pg_5m_sum['sigma']
-                    pg_5m_sum.set_index('Datetime_5m', inplace=True)
-                    
-                    # 다시 1분봉(df_pg_min) 메인 테이블에 조인 (5분 정각에만 값이 들어감)
-                    df_pg_min = df_pg_min.join(pg_5m_sum[['P_Score_5m_val']], how='left')
-                    df_pg_min['P_Score_5m'] = df_pg_min['P_Score_5m_val']
-                    
-                    df = df.join(df_pg_min[['Buy_1m', 'Sell_1m', 'Cum_Net', 'P_Score_5m']], how='left')
+                    df = df.join(df_pg_min[['Buy_1m', 'Sell_1m', 'Cum_Net']], how='left')
                     df['Cum_Net'] = df['Cum_Net'].ffill().fillna(0)
                     df['Buy_1m'] = df['Buy_1m'].fillna(0)
                     df['Sell_1m'] = df['Sell_1m'].fillna(0)
@@ -372,10 +361,10 @@ if auth_token and len(stock_number) == 6:
                         df['Anomaly_Dot'] = pd.NA
                         df['Anomaly_Text'] = ""
                 else:
-                    df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0; df['P_Score_5m'] = pd.NA
+                    df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0
                     df['Anomaly_Dot'] = pd.NA; df['Anomaly_Text'] = ""
             else:
-                df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0; df['P_Score_5m'] = pd.NA
+                df['Buy_1m'] = 0; df['Sell_1m'] = 0; df['Cum_Net'] = 0
                 df['Anomaly_Dot'] = pd.NA; df['Anomaly_Text'] = ""
 
             def process_broker_data(raw_data, lag_sec, suffix):
@@ -454,7 +443,7 @@ if auth_token and len(stock_number) == 6:
                     "가격 (한국식 컬러)", 
                     "거래량", 
                     "프로그램 수급", 
-                    "🚨 프로그램 폭발 타점 (좌측) & 5분 P-Score 추이 (우측)", 
+                    "🚨 프로그램 폭발 타점 (좌측) & 5분 Z-Score 추이 (우측)", # 💡 타이틀 Z-Score로 변경
                     f"{selected_broker_name1} 수급", 
                     f"{selected_broker_name2} 수급"
                 ),
@@ -493,12 +482,12 @@ if auth_token and len(stock_number) == 6:
                 ), row=4, col=1, secondary_y=False)
                 fig.add_hline(y=2.0, line_dash="dot", line_color="orange", annotation_text="2.0 컷오프", row=4, col=1, secondary_y=False)
 
-            # 💡 4층: 5분 P-Score 꺾은선 그래프 추가 (우측 Y축)
-            if 'P_Score_5m' in df.columns:
+            # 💡 4층: 5분 Z-Score 꺾은선 그래프 추가 (우측 Y축)
+            if 'Z_Score_5m' in df.columns:
                 fig.add_trace(go.Scatter(
-                    x=df.index, y=df['P_Score_5m'], mode='lines+markers',
-                    name="5분 P-Score (우측)", line=dict(color='#9370DB', width=2), # 눈에 확 띄는 보라색
-                    marker=dict(size=6, color='#9370DB'), connectgaps=True # 점들을 부드럽게 이어줌
+                    x=df.index, y=df['Z_Score_5m'], mode='lines+markers',
+                    name="5분 Z-Score (우측)", line=dict(color='#00CC96', width=2), # 눈에 띄는 에메랄드 그린
+                    marker=dict(size=6, color='#00CC96'), connectgaps=True # 점들을 부드럽게 이어줌
                 ), row=4, col=1, secondary_y=True)
                 fig.add_hline(y=0, line_dash="dash", line_color="gray", row=4, col=1, secondary_y=True)
 
